@@ -68,7 +68,7 @@ Tips for the person supervising:
 ## Progress
 
 - [x] A1 Keep awake
-- [ ] A2 QR pairing + sidebar menu
+- [x] A2 QR pairing + sidebar menu
 - [ ] A3 Chat housekeeping + safe saving
 - [ ] A4 Quick commands
 - [ ] B1 Push notifications

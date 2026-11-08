@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from agents_dialpad import config
+from agents_dialpad import config, pairing
 from agents_dialpad.app import create_app
 from agents_dialpad.keepawake import KeepAwake
 from agents_dialpad.providers import antigravity
@@ -328,4 +328,19 @@ def test_keep_awake_survives_a_failing_agent(env, monkeypatch, tmp_path):
         client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "x"})
         wait_until_idle(client, h, cid)
         assert backend.calls[-1] == "off"
+
+
+# --------------------------------------------------------------------------- pairing
+def test_pair_endpoint_returns_a_qr_and_needs_the_token(env, monkeypatch):
+    monkeypatch.setattr(pairing, "tailscale_url", lambda port: None)
+    client, h = env()
+    with client:
+        assert client.get("/api/pair").status_code == 401
+        r = client.get("/api/pair", headers=h)
+        assert r.status_code == 200
+        data = r.json()
+        assert data["qr"].startswith("data:image/svg+xml")
+        assert "#token=" in data["url"]
+        assert data["remote"] is False
+
 

@@ -63,6 +63,7 @@ git clone https://github.com/shazilhamzah/agents-dialpad.git && cd agents-dialpa
 | `agents-dialpad init [--project NAME=PATH]` | Create the data folder and choose project folders. |
 | `agents-dialpad project add\|list\|remove` | Manage the folders the phone can pick. |
 | `agents-dialpad token [--rotate]` | Show the access token (and the link for a device), or replace it. |
+| `agents-dialpad pair [--png FILE]` | Print a QR code (and link) to connect a phone without typing the URL. |
 | `agents-dialpad doctor` | Check Python, config, agent CLIs, the port and Tailscale. Exit code 1 if something blocks you. |
 | `agents-dialpad autostart install\|uninstall\|status` | Start automatically at login (below). `--dry-run` shows what would change. |
 
@@ -80,7 +81,8 @@ Short version with Tailscale (full guide, with alternatives: [docs/remote-access
    tailscale serve status                      # check what is already published first
    tailscale serve --bg --https=8443 8787
    ```
-3. On the phone, open `https://<your-machine>.<your-tailnet>.ts.net:8443/#token=<your token>`, then install it:
+3. Run `agents-dialpad pair` and scan the QR code with your phone's camera (or open
+   `https://<your-machine>.<your-tailnet>.ts.net:8443/#token=<your token>`), then install it:
    iOS Safari → Share → Add to Home Screen; Android Chrome → menu → Install app.
 
 Do **not** use Tailscale Funnel or port-forward agents-dialpad to the public internet.

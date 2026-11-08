@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config
+from . import config, pairing
 from .keepawake import KeepAwake
 from .providers import PLANNED, PROVIDERS
 from .runs import RunManager
@@ -94,6 +94,12 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             "usage": runs.usage,
             "keep_awake": keep_awake.enabled,
         }
+
+    @api.get("/pair")
+    def pair():
+        base = pairing.tailscale_url(cfg["port"])
+        link = pairing.pair_link(base or f"http://127.0.0.1:{cfg['port']}/", token)
+        return {"url": link, "remote": base is not None, "qr": pairing.qr_svg_data_uri(link)}
 
     def claude_limits() -> dict:
         """Claude Code reports its subscription windows on every turn; we keep the latest."""

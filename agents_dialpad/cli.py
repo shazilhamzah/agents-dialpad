@@ -131,7 +131,7 @@ def cmd_init(args) -> int:
     return 0
 
 
-# ------------------------------------------------------------------ token
+# ------------------------------------------------------------------ token / pair
 def cmd_token(args) -> int:
     if args.rotate:
         raw = config.read_raw()
@@ -144,6 +144,26 @@ def cmd_token(args) -> int:
     if not args.quiet:
         print(f"\nLink for this computer : {local_url(cfg, token)}")
         print("For your phone         : https://<your-machine>.<your-tailnet>.ts.net:8443/#token=" + token)
+    return 0
+
+
+def cmd_pair(args) -> int:
+    from . import pairing
+
+    cfg, token = config.load()
+    local = local_url(cfg)
+    base = args.url or pairing.tailscale_url(cfg["port"]) or local
+    remote = base != local
+    link = pairing.pair_link(base, token)
+    print("Anyone who scans this code can use your agents. Do not share or screenshot it.")
+    if not remote:
+        print("Phone access is not published, so this link only works on this computer. See docs/remote-access.md.")
+    if not args.no_qr:
+        pairing.qr_terminal(link)
+    if args.png:
+        pairing.qr_png(link, args.png)
+        print(f"Saved {args.png}")
+    print(link)
     return 0
 
 
@@ -198,6 +218,12 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--quiet", action="store_true", help="print only the token")
     t.set_defaults(func=cmd_token)
 
+    pa = sub.add_parser("pair", help="print a QR code and link to connect a phone")
+    pa.add_argument("--url", help="override the detected base URL")
+    pa.add_argument("--png", metavar="FILE", help="also save the QR code as a PNG file")
+    pa.add_argument("--no-qr", action="store_true", help="print only the link, no terminal QR")
+    pa.set_defaults(func=cmd_pair)
+
     d = sub.add_parser("doctor", help="check that everything needed is installed and ready")
     d.set_defaults(func=cmd_doctor)
 
@@ -208,7 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-COMMANDS = {"serve", "init", "project", "token", "doctor", "autostart"}
+COMMANDS = {"serve", "init", "project", "token", "pair", "doctor", "autostart"}
 
 
 def main(argv: list[str] | None = None) -> int:

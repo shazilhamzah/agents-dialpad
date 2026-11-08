@@ -30,6 +30,7 @@ const ICON = {
   term: '<path d="m4 17 6-6-6-6M12 19h8"/>',
   chev: '<path d="m6 9 6 6 6-6"/>',
   chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM21 14v.01M14 21h.01M17 21h4v-4"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[n]}</svg>`;
 
@@ -99,14 +100,17 @@ function confirmSheet({ title, body, confirm, danger }) {
   });
 }
 
+let menuAnchor = null;
 function closeMenu() {
   const m = $('#menu'); if (!m) return;
-  const btn = $('#btn-more'); if (btn) btn.setAttribute('aria-expanded', 'false');
+  if (menuAnchor) menuAnchor.setAttribute('aria-expanded', 'false');
+  menuAnchor = null;
   m.remove(); document.removeEventListener('pointerdown', onOutside, true);
 }
-function onOutside(e) { if (!e.target.closest('#menu') && !e.target.closest('#btn-more')) closeMenu(); }
+function onOutside(e) { if (!e.target.closest('#menu') && !(menuAnchor && menuAnchor.contains(e.target))) closeMenu(); }
 function openMenu(anchor, items) {
   closeMenu();
+  menuAnchor = anchor;
   const menu = document.createElement('div');
   menu.id = 'menu'; menu.className = 'menu'; menu.setAttribute('role', 'menu');
   menu.innerHTML = items.map((it, i) =>
@@ -171,6 +175,7 @@ function mountShell() {
       <header class="bar">
         <div class="titles"><h1>agents-dialpad</h1></div>
         <button class="icon-btn" id="btn-limits" type="button" aria-label="Usage limits">${icon('gauge')}</button>
+        <button class="icon-btn" id="btn-side-more" type="button" aria-label="More" aria-haspopup="menu" aria-expanded="false">${icon('more')}</button>
         <button class="icon-btn solid" id="btn-new" type="button" aria-label="New chat">${icon('plus')}</button>
       </header>
       <nav class="chats" id="chat-list" aria-label="Chat list"></nav>
@@ -178,9 +183,23 @@ function mountShell() {
     <main class="pane" id="pane"></main>
   </div>`;
   $('#btn-limits').onclick = openLimits;
+  $('#btn-side-more').onclick = (e) => { if ($('#menu')) return closeMenu(); openMenu(e.currentTarget, sideMenuItems()); };
   $('#btn-new').onclick = openNewChat;
   renderList();
   loadInfo().then(() => { renderList(); updateHeader(); }).catch(() => {});   // agent + model names for the list and header
+}
+
+function sideMenuItems() { return [{ icon: 'qr', label: 'Pair a device', run: openPair }]; }
+async function openPair() {
+  let data;
+  try { data = await getJSON('/pair'); } catch (e) { return handleErr(e); }
+  const dlg = openSheet(`<h2>Pair a device</h2>
+    <p class="lede">Scan with your phone's camera. Anyone who scans this code can use your agents, so don't share it.</p>
+    <div class="qr"><img src="${esc(data.qr)}" alt="QR code that opens agents-dialpad on another device" width="240" height="240"></div>
+    ${!data.remote ? '<p class="note">Phone access isn\'t published yet, so this code only works on this computer. Run <code>tailscale serve --bg --https=8443 8787</code> on the computer (see docs/remote-access.md).</p>' : ''}
+    <div class="actions"><button class="btn secondary" type="button" id="pair-copy">Copy link</button><button class="btn" type="button" data-close>Done</button></div>`, 'Pair a device');
+  $('[data-close]', dlg).onclick = () => dlg.close();
+  $('#pair-copy', dlg).onclick = async () => { if (await copyText(data.url)) toast('Link copied'); };
 }
 
 function renderList() {

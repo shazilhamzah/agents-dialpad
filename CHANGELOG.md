@@ -6,6 +6,8 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 ## [Unreleased]
 
 ### Added
+- **QR code pairing:** `agents-dialpad pair` prints a QR code in the terminal; the sidebar **More → Pair a device**
+  menu item shows the same code in the web app.
 - Keeps the computer awake while an agent is working (`keep_awake`).
 - **Installable package.** `uv tool install git+https://github.com/shazilhamzah/agents-dialpad` (or pipx) gives an
   `agents-dialpad` command; the UI ships inside the wheel. PyPI publishing is wired up and opt-in.
