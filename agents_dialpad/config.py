@@ -101,6 +101,8 @@ def load() -> tuple[dict, str]:
     cfg.setdefault("push_contact", "mailto:agents-dialpad@example.com")
     from . import quick
     cfg["quick_commands"], cfg["_quick_problems"] = quick.normalize(cfg.get("quick_commands"))
+    # Extra models to offer for Codex (empty by default: offers "Default").
+    cfg.setdefault("codex_models", [])
 
     token = os.environ.get("AG_TOKEN") or cfg.get("token")
     if token:

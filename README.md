@@ -1,11 +1,11 @@
 # agents-dialpad
 
-Chat with the AI coding agents on your own computer (Claude Code and Antigravity today) from your phone.
+Chat with the AI coding agents on your own computer (Claude Code, Antigravity and Codex) from your phone.
 Your computer stays on and logged in to the agents; agents-dialpad is a small web app that puts a mobile chat in
 front of them.
 
 ```
-Phone (installable PWA) ──private network (e.g. Tailscale)──► agents-dialpad (127.0.0.1:8787) ──► claude / agy CLIs
+Phone (installable PWA) ──private network (e.g. Tailscale)──► agents-dialpad (127.0.0.1:8787) ──► claude / agy / codex CLIs
 ```
 
 - One small Python process. No WSL, no tmux, no Docker, no build step for the UI.
@@ -32,7 +32,7 @@ Dialpad, Inc. "Claude Code", "Antigravity" and other product names belong to the
 
 - Python 3.11+ and [uv](https://docs.astral.sh/uv/) (or pipx)
 - At least one agent CLI, installed and **already logged in** on this machine:
-  [Claude Code](https://claude.com/claude-code) (`claude`) and/or Antigravity (`agy`)
+  [Claude Code](https://claude.com/claude-code) (`claude`), Antigravity (`agy`), and/or [Codex](https://github.com/openai/codex) (`codex`)
 - To use it from a phone: a private network path to your computer. [Tailscale](https://tailscale.com) is the
   recommended one; see [docs/remote-access.md](docs/remote-access.md) for the options.
 
@@ -126,6 +126,7 @@ Everything lives in `config.json` in the data folder (see [`config.example.json`
 | `approval_timeout_seconds` | Seconds to wait for command approvals in "Ask me before commands" mode before auto-denying (default 600). Overridden by `AG_APPROVAL_TIMEOUT`. |
 | `push_show_titles` | Include chat title in push notifications (`false` by default for privacy). |
 | `push_contact` | VAPID `sub` claim (`mailto:` address). Default: `mailto:agents-dialpad@example.com`. |
+| `codex_models` | List of model names to offer for Codex chats (default `[]` offers "Default"). |
 
 ### Access token
 
@@ -135,29 +136,30 @@ Static: generated once and reused on every run. Order of precedence: env var `AG
 ### Models
 
 Pick a model when starting a chat, or tap the model chip above the message box to switch; it applies from your next
-message. Claude Code's list is in `agents_dialpad/providers/claude.py`; Antigravity's comes live from `agy models`.
+message. Claude Code's list is in `agents_dialpad/providers/claude.py`; Antigravity's comes live from `agy models`;
+Codex offers "Default" plus any models configured in `"codex_models"`.
 
 ### Always-on instructions
 
 Off by default. Point `"instructions_file"` at any text file (absolute, relative to the data folder, or one of the examples
 shipped in the package) and its contents are added to every conversation (Claude Code via `--append-system-prompt`;
-Antigravity has no such flag, so it is prefixed to the first message with a short reminder after).
+Antigravity and Codex have no such flag, so it is prefixed to the first message with a short reminder after).
 `instructions/caveman.md` ships as an example: a terse-reply style condensed from the open-source "caveman" Claude skill.
 Enable it with `"instructions_file": "instructions/caveman.md"`.
 
 ### Advanced: wrapping an agent CLI
 
-`AG_CLAUDE` / `AG_AGY` choose the executable; `AG_CLAUDE_ARGS` / `AG_AGY_ARGS` (a JSON list) add arguments right after it,
-for example to run an agent through a wrapper. The test suite uses this to drive fake agents.
+`AG_CLAUDE` / `AG_AGY` / `AG_CODEX` choose the executable; `AG_CLAUDE_ARGS` / `AG_AGY_ARGS` / `AG_CODEX_ARGS` (a JSON list)
+add arguments right after it, for example to run an agent through a wrapper. The test suite uses this to drive fake agents.
 
 ## Permissions
 
-| Level | Claude Code | Antigravity | What the agent can do |
-|---|---|---|---|
-| Read-only | `--permission-mode plan` | `--mode plan` | read and search files |
-| Can edit files | `--permission-mode acceptEdits` | `--mode accept-edits` | edit files; commands needing approval are blocked and listed under the reply |
-| Ask me before commands | `--permission-mode default` + host prompts | `agy acp` (default mode) | edit files, prompts for confirmation before running commands |
-| Full access *(opt-in)* | `--permission-mode bypassPermissions` | `--dangerously-skip-permissions` | run any command without asking |
+| Level | Claude Code | Antigravity | Codex | What the agent can do |
+|---|---|---|---|---|
+| Read-only | `--permission-mode plan` | `--mode plan` | `-s read-only` | read and search files |
+| Can edit files | `--permission-mode acceptEdits` | `--mode accept-edits` | `-s workspace-write` | edit files; commands needing approval are blocked and listed under the reply |
+| Ask me before commands | `--permission-mode default` + host prompts | `agy acp` (default mode) | not available yet | edit files, prompts for confirmation before running commands |
+| Full access *(opt-in)* | `--permission-mode bypassPermissions` | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` | run any command without asking |
 
 When using **Ask me before commands** (Claude Code and Antigravity), shell commands and tools that require confirmation display an interactive card in the chat with **Allow** and **Deny** buttons. If push notifications are enabled, a notification is sent to your device with the command details. Unanswered requests time out and auto-deny after 10 minutes (configured via `approval_timeout_seconds` in `config.json` or the `AG_APPROVAL_TIMEOUT` environment variable). For Antigravity, "Ask me before commands" drives `agy acp` over the Agent Client Protocol (ACP).
 
@@ -247,7 +249,7 @@ After an agent edits files, tap **More → Changes** in that chat to review what
 
 - `agents_dialpad/app.py`: HTTP API (`/api/...`, bearer token) and static files; `create_app()` builds an independent app
 - `agents_dialpad/runs.py`: background turns; they survive phone lock/disconnect and can be replayed
-- `agents_dialpad/providers/`: one adapter per CLI (`claude.py`, `antigravity.py`); copy one to add another agent
+- `agents_dialpad/providers/`: one adapter per CLI (`claude.py`, `antigravity.py`, `codex.py`); copy one to add another agent
 - `agents_dialpad/cli.py`, `doctor.py`, `autostart.py`: the command line
 - `agents_dialpad/static/`: the mobile PWA (plain HTML/CSS/JS); `markdown.js` is the dependency-free Markdown renderer
 - `scripts/`: extra Windows helpers for a git checkout
@@ -256,7 +258,6 @@ After an agent edits files, tap **More → Changes** in that chat to review what
 
 ## Known gaps
 
-- Codex is not implemented yet (its `codex exec --json` mode is the likely route).
 - Antigravity does not report tool output (only which tool ran) or cost.
 - Antigravity prompts go on the command line, so messages over ~28k characters are rejected.
 - No in-app approval prompts.

@@ -70,6 +70,6 @@ README: requirements list, permissions table column for Codex, known gaps. CHANG
 
 ## Acceptance checklist
 
-- [ ] Findings file and fixtures exist.
-- [ ] Codex appears as available when installed, works for all modes, resumes conversations.
-- [ ] Full access for Codex only when `allow_full_access` is true.
+- [x] Findings file and fixtures exist.
+- [x] Codex appears as available when installed, works for all modes, resumes conversations.
+- [x] Full access for Codex only when `allow_full_access` is true.

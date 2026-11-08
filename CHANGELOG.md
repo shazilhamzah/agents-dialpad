@@ -17,6 +17,9 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 - **QR code pairing:** `agents-dialpad pair` prints a QR code in the terminal; the sidebar **More → Pair a device**
   menu item shows the same code in the web app.
 - Keeps the computer awake while an agent is working (`keep_awake`).
+- **Codex agent support.** Use OpenAI Codex (`codex`) as a third agent with streaming replies, tool command execution, conversation memory, permission modes (read-only, edit, full access), and configurable model choice via `"codex_models"`.
+- `AG_CODEX` and `AG_CODEX_ARGS` environment variables to configure or wrap the Codex CLI.
+- `agents-dialpad doctor` now checks for Codex CLI installation alongside Claude Code and Antigravity.
 - **Installable package.** `uv tool install git+https://github.com/shazilhamzah/agents-dialpad` (or pipx) gives an
   `agents-dialpad` command; the UI ships inside the wheel. PyPI publishing is wired up and opt-in.
 - **Command line:** `serve`, `init`, `project add|list|remove`, `token [--rotate]`, `doctor`, `autostart install|uninstall|status`.

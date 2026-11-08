@@ -43,9 +43,10 @@ def agent_checks() -> list[Check]:
     checks = [
         _agent("Claude Code (claude)", "AG_CLAUDE", "claude", "Install Claude Code and log in: https://claude.com/claude-code"),
         _agent("Antigravity (agy)", "AG_AGY", "agy", "Install Antigravity's CLI and log in."),
+        _agent("Codex (codex)", "AG_CODEX", "codex", "Install Codex CLI and log in: https://github.com/openai/codex"),
     ]
     if all(c.level != "ok" for c in checks):
-        checks.append(Check("fail", "At least one agent CLI is required", "", "Install and log in to Claude Code and/or Antigravity."))
+        checks.append(Check("fail", "At least one agent CLI is required", "", "Install and log in to Claude Code, Antigravity, or Codex."))
     return checks
 
 

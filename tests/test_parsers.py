@@ -1,5 +1,9 @@
 """Output parsers for the agent CLIs. Sample lines mirror real `stream-json` output."""
-from agents_dialpad.providers import antigravity, claude
+import json
+from pathlib import Path
+from agents_dialpad.providers import antigravity, claude, codex
+
+FIXTURES = Path(__file__).parent / "fixtures" / "codex"
 
 
 def feed_all(parser, objs):
@@ -192,3 +196,70 @@ def test_agy_acp_recorded_fixtures():
     resume_msgs = load_fixture("resume_run.jsonl")
     load_req = next(m["message"] for m in resume_msgs if m.get("message", {}).get("method") == "session/load")
     assert load_req["params"]["sessionId"]
+# ---------------------------------------------------------------- Codex
+def _load_fixture(name: str) -> list[dict]:
+    p = FIXTURES / name
+    return [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def test_codex_read_only_fixture():
+    objs = _load_fixture("read_only_run.jsonl")
+    evs = feed_all(codex._Parser(model="default"), objs)
+    types = [e["type"] for e in evs]
+    assert types == ["session", "text", "usage", "done"]
+    assert evs[0]["session_id"].startswith("01a1bd")
+    assert evs[1]["text"] == "pong"
+    assert "input_tokens" in evs[2]["info"]
+    assert evs[3]["is_error"] is False
+
+
+def test_codex_command_fixture():
+    objs = _load_fixture("command_run.jsonl")
+    evs = feed_all(codex._Parser(model="default"), objs)
+    types = [e["type"] for e in evs]
+    assert "session" in types
+    assert "tool_use" in types
+    assert "tool_result" in types
+    assert "text" in types
+    assert "usage" in types
+    assert types[-1] == "done"
+    use = next(e for e in evs if e["type"] == "tool_use")
+    assert use["name"] == "command_execution" and "echo hello" in use["input"]["command"]
+    res = next(e for e in evs if e["type"] == "tool_result")
+    assert res["is_error"] is False and "hello" in res["text"]
+    assert evs[-1]["is_error"] is False
+
+
+def test_codex_resume_fixture():
+    objs = _load_fixture("resume_run.jsonl")
+    evs = feed_all(codex._Parser(model="default"), objs)
+    types = [e["type"] for e in evs]
+    assert types == ["session", "text", "usage", "done"]
+    assert evs[0]["session_id"].startswith("01a1bd")
+    assert "echo hello" in evs[1]["text"]
+    assert evs[-1]["is_error"] is False
+
+
+def test_codex_error_fixture():
+    objs = _load_fixture("error_run.jsonl")
+    evs = feed_all(codex._Parser(model="invalid"), objs)
+    types = [e["type"] for e in evs]
+    assert types == ["session", "error", "done"]
+    assert "invalid-model-xyz" in evs[1]["message"]
+    assert evs[2]["is_error"] is True
+
+
+def test_codex_long_tool_result_is_truncated():
+    p = codex._Parser()
+    p.feed({"type": "thread.started", "thread_id": "sid"})
+    p.feed({
+        "type": "item.started",
+        "item": {"id": "c1", "type": "command_execution", "command": "cat big", "status": "in_progress"},
+    })
+    evs = p.feed({
+        "type": "item.completed",
+        "item": {"id": "c1", "type": "command_execution", "command": "cat big", "aggregated_output": "x" * 10_000, "exit_code": 0, "status": "completed"},
+    })
+    assert len(evs) == 1
+    assert len(evs[0]["text"]) < 4_100 and evs[0]["text"].endswith("… (truncated)")
+

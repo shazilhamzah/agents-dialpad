@@ -115,6 +115,7 @@ def test_doctor_fails_without_any_agent_cli(data, monkeypatch):
     run("init", "--yes")
     monkeypatch.setenv("AG_CLAUDE", "definitely-not-installed-claude")
     monkeypatch.setenv("AG_AGY", "definitely-not-installed-agy")
+    monkeypatch.setenv("AG_CODEX", "definitely-not-installed-codex")
     monkeypatch.setattr(doctor_mod, "tailscale_checks", lambda port: [])
     checks = doctor_mod.run_checks()
     assert any(c.level == "fail" and "agent CLI" in c.label for c in checks)
@@ -125,6 +126,7 @@ def test_doctor_is_happy_with_an_agent_cli(data, monkeypatch):
     run("init", "--yes")
     monkeypatch.setenv("AG_CLAUDE", sys.executable)                    # any real executable that answers --version
     monkeypatch.setenv("AG_AGY", "definitely-not-installed-agy")
+    monkeypatch.setenv("AG_CODEX", "definitely-not-installed-codex")
     monkeypatch.setattr(doctor_mod, "tailscale_checks", lambda port: [])
     checks = doctor_mod.run_checks()
     assert not any(c.level == "fail" for c in checks)

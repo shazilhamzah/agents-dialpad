@@ -24,6 +24,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("AG_CLAUDE_ARGS", json.dumps([str(FAKES / "fake_claude.py")]))
     monkeypatch.setenv("AG_AGY", sys.executable)
     monkeypatch.setenv("AG_AGY_ARGS", json.dumps([str(FAKES / "fake_agy.py")]))
+    monkeypatch.setenv("AG_CODEX", sys.executable)
+    monkeypatch.setenv("AG_CODEX_ARGS", json.dumps([str(FAKES / "fake_codex.py")]))
     monkeypatch.setenv("FAKE_LOG", str(tmp_path / "calls.jsonl"))
     monkeypatch.setattr(antigravity, "_models_cache", None)
     monkeypatch.setattr(antigravity, "_limits_cache", None)
@@ -90,7 +92,8 @@ def test_info_lists_agents_models_projects_and_modes(env):
     with client:
         info = client.get("/api/info", headers=h).json()
         agents = {p["name"]: p for p in info["providers"]}
-        assert agents["claude"]["available"] and agents["antigravity"]["available"] and not agents["codex"]["available"]
+        assert agents["claude"]["available"] and agents["antigravity"]["available"] and agents["codex"]["available"]
+        assert [m["id"] for m in agents["codex"]["models"]] == [""]
         assert [m["id"] for m in agents["antigravity"]["models"]][:2] == ["", "gemini-test-low"]
         assert info["projects"] == ["workspace"]
         assert [m["id"] for m in info["modes"]] == ["readonly", "edit", "ask"]       # no full access unless enabled
@@ -207,6 +210,82 @@ def test_antigravity_gets_instructions_prefixed_to_the_prompt(env, tmp_path, cal
         assert prompt.startswith("Be brief.") and prompt.endswith("question")
 
 
+# --------------------------------------------------------------------------- codex
+def test_codex_turn_and_resume(env, calls):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h, provider="codex", mode="edit", model="o3-mini")
+        first = turn(client, h, cid, "hello")
+        info = json.loads(text_of(first).split(" ", 1)[1])
+        assert info["mode"] == "workspace-write" and info["model"] == "o3-mini" and info["resumed"] is False
+        assert info["bypass"] is False
+        wait_until_idle(client, h, cid)
+        chat = client.get(f"/api/chats/{cid}", headers=h).json()
+        assert chat["session_id"] == "codex-session-1"
+
+        second = turn(client, h, cid, "again")
+        info2 = json.loads(text_of(second).split(" ", 1)[1])
+        assert info2["resumed"] is True and info2["session_id"] == "codex-session-1"
+        argv = calls()[1]["argv"]
+        assert "resume" in argv and argv[argv.index("resume") + 1] == "codex-session-1"
+
+
+def test_codex_modes_map_to_sandbox_flags(env, calls):
+    client, h = env()
+    with client:
+        # readonly
+        cid1 = new_chat(client, h, provider="codex", mode="readonly")
+        turn(client, h, cid1, "x")
+        argv1 = calls()[0]["argv"]
+        assert "-s" in argv1 and argv1[argv1.index("-s") + 1] == "read-only"
+
+        # edit
+        cid2 = new_chat(client, h, provider="codex", mode="edit")
+        turn(client, h, cid2, "y")
+        argv2 = calls()[1]["argv"]
+        assert "-s" in argv2 and argv2[argv2.index("-s") + 1] == "workspace-write"
+
+
+def test_codex_full_access_needs_the_flag(env, calls):
+    client, h = env(allow_full_access=False)
+    with client:
+        r = client.post("/api/chats", headers=h, json={"provider": "codex", "project": "workspace", "mode": "full"})
+        assert r.status_code == 400
+
+    client, h = env(allow_full_access=True)
+    with client:
+        cid = new_chat(client, h, provider="codex", mode="full")
+        turn(client, h, cid, "z")
+        argv = calls()[0]["argv"]
+        assert "--dangerously-bypass-approvals-and-sandbox" in argv
+        assert "-s" not in argv
+
+
+def test_codex_stop(env):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h, provider="codex")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "SLOW"})
+        time.sleep(1.5)
+        assert client.get(f"/api/chats/{cid}", headers=h).json()["running"] is True
+        client.post(f"/api/chats/{cid}/stop", headers=h)
+        wait_until_idle(client, h, cid)
+        with client.stream("GET", f"/api/chats/{cid}/stream?start=0", headers=h) as r:
+            events = [json.loads(line) for line in r.iter_lines() if line and '"ping"' not in line]
+        assert events[-1] == {"type": "done", "is_error": False, "stopped": True}
+        assert "tick0" in text_of(events)
+
+
+def test_codex_gets_instructions_prefixed(env, tmp_path, calls):
+    (tmp_path / "style.md").write_text("Terse caveman.", encoding="utf-8")
+    client, h = env(instructions_file=str(tmp_path / "style.md"))
+    with client:
+        turn(client, h, new_chat(client, h, provider="codex"), "question")
+        prompt = calls()[0]["prompt"]
+        assert prompt.startswith("Terse caveman.") and prompt.endswith("question")
+
+
+
 # --------------------------------------------------------------------------- permissions
 def test_full_access_only_exists_when_enabled(env, calls):
     client, h = env()
@@ -239,7 +318,7 @@ def test_bad_input_is_rejected(env):
         assert post(model="gpt-9") == 400
         assert post(mode="nope") == 400
         assert client.post("/api/chats", headers=h, json={"provider": "claude", "project": "../etc"}).status_code == 400
-        assert client.post("/api/chats", headers=h, json={"provider": "codex", "project": "workspace"}).status_code == 400
+        assert client.post("/api/chats", headers=h, json={"provider": "unknown", "project": "workspace"}).status_code == 400
         assert client.post("/api/chats", headers=h, json={"provider": "antigravity", "project": "workspace", "mode": "ask"}).status_code == 200
         assert client.get("/api/chats/..%5C..%5Cconfig", headers=h).status_code == 404
 

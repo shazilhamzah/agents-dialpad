@@ -13,5 +13,6 @@
   "push_show_titles": false,
   "push_contact": "mailto:you@example.com",
   "approval_timeout_seconds": 600,
-  "allow_full_access": false
+  "allow_full_access": false,
+  "codex_models": []
 }
