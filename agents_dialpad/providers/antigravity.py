@@ -19,7 +19,7 @@ from typing import AsyncIterator
 
 from ._cmd import extra_args
 
-MODES = {"readonly": "plan", "edit": "accept-edits", "full": "accept-edits"}  # "full" also adds --dangerously-skip-permissions
+MODES = {"readonly": "plan", "edit": "accept-edits", "ask": "default", "full": "accept-edits"}  # "full" also adds --dangerously-skip-permissions
 MAX_PROMPT_CHARS = 28_000  # Windows command-line limit is ~32k
 REMINDER = "[Keep following the style instructions given at the start of this conversation.]"
 
@@ -81,7 +81,7 @@ class _Parser:
 class AntigravityProvider:
     name = "antigravity"
     label = "Antigravity"
-    supports_ask = False
+    supports_ask = True
 
     def available(self) -> bool:
         return _exe() is not None
@@ -158,6 +158,13 @@ class AntigravityProvider:
         approval_timeout: float = 600,
         **kwargs,
     ) -> AsyncIterator[dict]:
+        if chat.get("mode") == "ask":
+            async for ev in self._stream_acp(
+                chat, prompt, cwd, run, instructions=instructions, add_dirs=add_dirs, approval_timeout=approval_timeout
+            ):
+                yield ev
+            return
+
         exe = _exe()
         if not exe:
             raise RuntimeError("`agy` was not found on PATH (set AG_AGY to its full path).")
@@ -221,6 +228,229 @@ class AntigravityProvider:
                 else:
                     tail = (" ".join(parser.notes) + " " + stderr.decode("utf-8", "replace")).strip()[-800:]
                     yield {"type": "error", "message": f"agy exited with code {code}. {tail}"}
+        finally:
+            if proc.returncode is None:
+                run.kill()
+
+    async def _stream_acp(
+        self,
+        chat: dict,
+        prompt: str,
+        cwd: str,
+        run,
+        instructions: str = "",
+        add_dirs: tuple[str, ...] | list[str] = (),
+        approval_timeout: float = 600,
+    ) -> AsyncIterator[dict]:
+        exe = _exe()
+        if not exe:
+            raise RuntimeError("`agy` was not found on PATH (set AG_AGY to its full path).")
+        env_timeout = os.environ.get("AG_APPROVAL_TIMEOUT")
+        timeout = float(env_timeout) if env_timeout else approval_timeout
+        if instructions:
+            prefix = instructions if not chat.get("session_id") else REMINDER
+            prompt = f"{prefix}\n\n---\nUser message:\n{prompt}"
+
+        args = [exe, *extra_args("AG_AGY_ARGS"), "acp"]
+        for d in add_dirs:
+            args += ["--add-dir", d]
+
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=cwd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=1 << 25,
+        )
+        run.proc = proc
+        stderr = bytearray()
+
+        async def drain_stderr() -> None:
+            while chunk := await proc.stderr.read(4096):
+                if len(stderr) < 8000:
+                    stderr.extend(chunk)
+
+        err_task = asyncio.create_task(drain_stderr())
+
+        rpc_id = 1
+
+        async def send_rpc(msg: dict) -> None:
+            if proc.stdin and not proc.stdin.is_closing():
+                payload = (json.dumps(msg) + "\n").encode("utf-8")
+                proc.stdin.write(payload)
+                await proc.stdin.drain()
+
+        init_id = rpc_id
+        rpc_id += 1
+        await send_rpc({
+            "jsonrpc": "2.0",
+            "id": init_id,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": 1,
+                "capabilities": {},
+                "clientInfo": {"name": "agents-dialpad", "version": "0.1.0"},
+            },
+        })
+
+        session_rpc_id = rpc_id
+        rpc_id += 1
+        sess_id = chat.get("session_id")
+        if sess_id:
+            await send_rpc({
+                "jsonrpc": "2.0",
+                "id": session_rpc_id,
+                "method": "session/load",
+                "params": {"sessionId": sess_id, "cwd": str(cwd).replace("\\", "/"), "mcpServers": []},
+            })
+        else:
+            await send_rpc({
+                "jsonrpc": "2.0",
+                "id": session_rpc_id,
+                "method": "session/new",
+                "params": {"cwd": str(cwd).replace("\\", "/"), "mcpServers": []},
+            })
+
+        saw_done = False
+        prompt_sent = False
+        prompt_rpc_id: int | None = None
+
+        try:
+            async for raw in proc.stdout:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+
+                if obj.get("id") == session_rpc_id and "result" in obj:
+                    res = obj["result"]
+                    active_sess = res.get("sessionId")
+                    if active_sess:
+                        chat["session_id"] = active_sess
+                        yield {
+                            "type": "session",
+                            "session_id": active_sess,
+                            "model": chat.get("model") or (res.get("models") or {}).get("currentModelId"),
+                        }
+
+                    if chat.get("model"):
+                        model_id = rpc_id
+                        rpc_id += 1
+                        await send_rpc({
+                            "jsonrpc": "2.0",
+                            "id": model_id,
+                            "method": "session/set_config_option",
+                            "params": {
+                                "sessionId": active_sess,
+                                "configId": "model",
+                                "value": chat["model"],
+                            },
+                        })
+
+                    prompt_rpc_id = rpc_id
+                    rpc_id += 1
+                    prompt_sent = True
+                    await send_rpc({
+                        "jsonrpc": "2.0",
+                        "id": prompt_rpc_id,
+                        "method": "session/prompt",
+                        "params": {
+                            "sessionId": active_sess,
+                            "prompt": [{"type": "text", "text": prompt}],
+                        },
+                    })
+                    continue
+
+                if not prompt_sent:
+                    continue
+
+                if obj.get("method") == "session/update":
+                    update = (obj.get("params") or {}).get("update") or {}
+                    u_type = update.get("sessionUpdate")
+                    if u_type == "agent_message_chunk":
+                        text = ((update.get("content") or {}).get("text")) or ""
+                        if text:
+                            yield {"type": "text", "text": text}
+                    elif u_type == "tool_call":
+                        tool_name = update.get("name")
+                        t_id = update.get("toolCallId")
+                        params = update.get("rawInput") or update.get("args") or {}
+                        yield {"type": "tool_use", "id": str(t_id), "name": tool_name, "input": params}
+                    elif u_type == "tool_call_update":
+                        status = update.get("status")
+                        t_id = update.get("toolCallId")
+                        if status in ("completed", "failed"):
+                            out_text = ((update.get("rawOutput") or {}).get("output")) or ""
+                            yield {
+                                "type": "tool_result",
+                                "id": str(t_id),
+                                "text": out_text,
+                                "is_error": status == "failed",
+                            }
+                    continue
+
+                if obj.get("method") == "session/request_permission":
+                    req_id = str(obj.get("id"))
+                    params = obj.get("params") or {}
+                    tool_call = params.get("toolCall") or {}
+                    tool_name = tool_call.get("name", "unknown")
+                    args_data = tool_call.get("rawInput") or tool_call.get("args") or {}
+                    cmd = args_data.get("CommandLine", "") if isinstance(args_data, dict) else str(args_data)
+                    desc = args_data.get("toolSummary", "") if isinstance(args_data, dict) else tool_call.get("title", "")
+                    yield {
+                        "type": "approval",
+                        "id": req_id,
+                        "req_id": req_id,
+                        "tool": tool_name,
+                        "command": cmd,
+                        "description": desc,
+                    }
+                    allow, by = await run.wait_decision(req_id, timeout)
+                    option_id = "allow" if allow else "deny"
+                    resp = {
+                        "jsonrpc": "2.0",
+                        "id": obj.get("id"),
+                        "result": {
+                            "outcome": {
+                                "outcome": "selected",
+                                "optionId": option_id,
+                            }
+                        },
+                    }
+                    await send_rpc(resp)
+                    yield {
+                        "type": "approval_result",
+                        "id": req_id,
+                        "req_id": req_id,
+                        "allow": allow,
+                        "by": by,
+                    }
+                    continue
+
+                if prompt_rpc_id is not None and obj.get("id") == prompt_rpc_id:
+                    saw_done = True
+                    if proc.stdin and not proc.stdin.is_closing():
+                        try:
+                            proc.stdin.close()
+                        except (OSError, RuntimeError):
+                            pass
+                    yield {"type": "done", "is_error": False, "stopped": run.stopped}
+                    break
+
+            await err_task
+            if not saw_done:
+                if run.stopped:
+                    yield {"type": "done", "is_error": False, "stopped": True}
+                else:
+                    code = await proc.wait()
+                    err_msg = stderr.decode("utf-8", "replace").strip()[-800:]
+                    yield {"type": "error", "message": f"agy acp exited with code {code}. {err_msg}"}
         finally:
             if proc.returncode is None:
                 run.kill()

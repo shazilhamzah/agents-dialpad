@@ -156,10 +156,10 @@ for example to run an agent through a wrapper. The test suite uses this to drive
 |---|---|---|---|
 | Read-only | `--permission-mode plan` | `--mode plan` | read and search files |
 | Can edit files | `--permission-mode acceptEdits` | `--mode accept-edits` | edit files; commands needing approval are blocked and listed under the reply |
-| Ask me before commands | `--permission-mode default` + host prompts | *(coming in Part 3)* | edit files, prompts for confirmation before running commands |
+| Ask me before commands | `--permission-mode default` + host prompts | `agy acp` (default mode) | edit files, prompts for confirmation before running commands |
 | Full access *(opt-in)* | `--permission-mode bypassPermissions` | `--dangerously-skip-permissions` | run any command without asking |
 
-When using **Ask me before commands** (Claude Code), shell commands and tools that require confirmation display an interactive card in the chat with **Allow** and **Deny** buttons. If push notifications are enabled, a notification is sent to your device with the command details. Unanswered requests time out and auto-deny after 10 minutes (configured via `approval_timeout_seconds` in `config.json` or the `AG_APPROVAL_TIMEOUT` environment variable).
+When using **Ask me before commands** (Claude Code and Antigravity), shell commands and tools that require confirmation display an interactive card in the chat with **Allow** and **Deny** buttons. If push notifications are enabled, a notification is sent to your device with the command details. Unanswered requests time out and auto-deny after 10 minutes (configured via `approval_timeout_seconds` in `config.json` or the `AG_APPROVAL_TIMEOUT` environment variable). For Antigravity, "Ask me before commands" drives `agy acp` over the Agent Client Protocol (ACP).
 
 In **Read-only** and **Can edit files**, any command that requires interactive approval is refused and shown as "blocked (needs approval)".
 

@@ -95,7 +95,7 @@ def test_info_lists_agents_models_projects_and_modes(env):
         assert info["projects"] == ["workspace"]
         assert [m["id"] for m in info["modes"]] == ["readonly", "edit", "ask"]       # no full access unless enabled
         assert [m["id"] for m in agents["claude"]["modes"]] == ["readonly", "edit", "ask"]
-        assert [m["id"] for m in agents["antigravity"]["modes"]] == ["readonly", "edit"]
+        assert [m["id"] for m in agents["antigravity"]["modes"]] == ["readonly", "edit", "ask"]
 
 
 # --------------------------------------------------------------------------- claude
@@ -240,7 +240,7 @@ def test_bad_input_is_rejected(env):
         assert post(mode="nope") == 400
         assert client.post("/api/chats", headers=h, json={"provider": "claude", "project": "../etc"}).status_code == 400
         assert client.post("/api/chats", headers=h, json={"provider": "codex", "project": "workspace"}).status_code == 400
-        assert client.post("/api/chats", headers=h, json={"provider": "antigravity", "project": "workspace", "mode": "ask"}).status_code == 400
+        assert client.post("/api/chats", headers=h, json={"provider": "antigravity", "project": "workspace", "mode": "ask"}).status_code == 200
         assert client.get("/api/chats/..%5C..%5Cconfig", headers=h).status_code == 404
 
 
@@ -413,6 +413,130 @@ def test_other_modes_are_unchanged(env, calls):
         # Finish the run
         client.post(f"/api/chats/{cid_ask}/approvals/req-1", headers=h, json={"allow": True})
         wait_until_idle(client, h, cid_ask)
+
+
+def test_agy_ask_mode_waits_and_runs_after_allow(env, calls):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h, provider="antigravity", mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+        end = time.time() + 5
+        while time.time() < end and not calls():
+            time.sleep(0.05)
+        end = time.time() + 5
+        approved = False
+        while time.time() < end:
+            r = client.post(f"/api/chats/{cid}/approvals/req-1", headers=h, json={"allow": True})
+            if r.status_code == 200:
+                assert r.json() == {"ok": True}
+                approved = True
+                break
+            time.sleep(0.05)
+        assert approved, "Approval request req-1 was not received in time"
+        wait_until_idle(client, h, cid)
+        with client.stream("GET", f"/api/chats/{cid}/stream?start=0", headers=h) as r:
+            events = [json.loads(line) for line in r.iter_lines() if line and '"ping"' not in line]
+        assert "pong approved" in text_of(events)
+        assert any(e.get("type") == "approval" and (e.get("id") == "req-1" or e.get("req_id") == "req-1") for e in events)
+        assert any(e.get("type") == "approval_result" and e.get("allow") is True and e.get("by") == "user" for e in events)
+
+
+def test_agy_ask_mode_continues_after_deny(env, calls):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h, provider="antigravity", mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+        end = time.time() + 5
+        while time.time() < end and not calls():
+            time.sleep(0.05)
+        end = time.time() + 5
+        denied = False
+        while time.time() < end:
+            r = client.post(f"/api/chats/{cid}/approvals/req-1", headers=h, json={"allow": False})
+            if r.status_code == 200:
+                assert r.json() == {"ok": True}
+                denied = True
+                break
+            time.sleep(0.05)
+        assert denied, "Approval request req-1 was not received in time"
+        wait_until_idle(client, h, cid)
+        with client.stream("GET", f"/api/chats/{cid}/stream?start=0", headers=h) as r:
+            events = [json.loads(line) for line in r.iter_lines() if line and '"ping"' not in line]
+        assert "pong denied" in text_of(events)
+        assert any(e.get("type") == "approval" and (e.get("id") == "req-1" or e.get("req_id") == "req-1") for e in events)
+        assert any(e.get("type") == "approval_result" and e.get("allow") is False and e.get("by") == "user" for e in events)
+
+
+def test_agy_unanswered_approval_times_out_as_deny(env, monkeypatch):
+    monkeypatch.setenv("AG_APPROVAL_TIMEOUT", "1")
+    client, h = env()
+    with client:
+        cid = new_chat(client, h, provider="antigravity", mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+        wait_until_idle(client, h, cid, timeout=10)
+        with client.stream("GET", f"/api/chats/{cid}/stream?start=0", headers=h) as r:
+            events = [json.loads(line) for line in r.iter_lines() if line and '"ping"' not in line]
+        assert "pong denied" in text_of(events)
+        assert any(e.get("type") == "approval_result" and e.get("allow") is False and e.get("by") == "timeout" for e in events)
+
+
+def test_agy_stopping_while_waiting_ends_the_reply(env, calls):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h, provider="antigravity", mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+        end = time.time() + 5
+        while time.time() < end and not calls():
+            time.sleep(0.05)
+        time.sleep(0.3)
+        client.post(f"/api/chats/{cid}/stop", headers=h)
+        wait_until_idle(client, h, cid)
+        with client.stream("GET", f"/api/chats/{cid}/stream?start=0", headers=h) as r:
+            events = [json.loads(line) for line in r.iter_lines() if line and '"ping"' not in line]
+        assert events[-1] == {"type": "done", "is_error": False, "stopped": True}
+        assert any(e.get("type") == "approval_result" and e.get("by") == "stopped" for e in events)
+
+
+def test_agy_second_message_resumes_session_in_ask_mode(env, calls):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h, provider="antigravity", mode="ask")
+        turn(client, h, cid, "first")
+        wait_until_idle(client, h, cid)
+        turn(client, h, cid, "second")
+        wait_until_idle(client, h, cid)
+        call_list = [c for c in calls() if c.get("agent") == "agy"]
+        assert len(call_list) >= 2
+        chat = client.get(f"/api/chats/{cid}", headers=h).json()
+        assert chat["session_id"] == "agy-session-1"
+
+
+def test_agy_other_modes_use_dash_p(env, calls):
+    client, h = env()
+    with client:
+        # readonly
+        cid_ro = new_chat(client, h, provider="antigravity", mode="readonly")
+        turn(client, h, cid_ro, "ro")
+        wait_until_idle(client, h, cid_ro)
+        last_call = calls()[-1]
+        assert "acp" not in last_call["argv"]
+        assert any(a.startswith("-p=") for a in last_call["argv"])
+
+        # edit
+        cid_edit = new_chat(client, h, provider="antigravity", mode="edit")
+        turn(client, h, cid_edit, "edit")
+        wait_until_idle(client, h, cid_edit)
+        last_call = calls()[-1]
+        assert "acp" not in last_call["argv"]
+        assert any(a.startswith("-p=") for a in last_call["argv"])
+
+        # ask
+        cid_ask = new_chat(client, h, provider="antigravity", mode="ask")
+        turn(client, h, cid_ask, "ask")
+        wait_until_idle(client, h, cid_ask)
+        last_call = calls()[-1]
+        assert "acp" in last_call["argv"]
+        assert not any(a.startswith("-p=") for a in last_call["argv"])
 
 
 # --------------------------------------------------------------------------- run control

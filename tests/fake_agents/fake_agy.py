@@ -10,6 +10,12 @@ import time
 
 args = sys.argv[1:]
 
+if "acp" in args:
+    sys.path.insert(0, os.path.dirname(__file__))
+    import fake_agy_acp
+    fake_agy_acp.run(args)
+    sys.exit(0)
+
 
 def flag(name):
     return args[args.index(name) + 1] if name in args and args.index(name) + 1 < len(args) else None

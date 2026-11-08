@@ -151,3 +151,44 @@ def test_agy_denied_command_with_no_output_explains_why():
 def test_agy_failed_status_is_an_error():
     (done,) = antigravity._Parser().feed({"event": "result", "result": {"status": "FAILED", "response": ""}})
     assert done["is_error"] is True and done["result"] == "FAILED"
+
+
+def test_agy_acp_recorded_fixtures():
+    import json
+    from pathlib import Path
+
+    fixture_dir = Path(__file__).parent / "fixtures" / "agy_acp"
+    assert (fixture_dir / "allow_run.jsonl").exists()
+    assert (fixture_dir / "deny_run.jsonl").exists()
+    assert (fixture_dir / "resume_run.jsonl").exists()
+
+    def load_fixture(name):
+        items = []
+        with open(fixture_dir / name, encoding="utf-8") as f:
+            for line in f:
+                items.append(json.loads(line))
+        return items
+
+    # Allow run
+    allow_msgs = load_fixture("allow_run.jsonl")
+    perm_req = next(m["message"] for m in allow_msgs if m.get("message", {}).get("method") == "session/request_permission")
+    assert perm_req["params"]["toolCall"]["name"] == "run_command"
+    assert [o["optionId"] for o in perm_req["params"]["options"]] == ["allow", "deny"]
+    allow_decision = next(m["message"] for m in allow_msgs if m.get("direction") == "send" and "result" in m.get("message", {}))
+    assert allow_decision["result"]["outcome"]["optionId"] == "allow"
+
+    # Deny run
+    deny_msgs = load_fixture("deny_run.jsonl")
+    deny_decision = next(m["message"] for m in deny_msgs if m.get("direction") == "send" and "result" in m.get("message", {}))
+    assert deny_decision["result"]["outcome"]["optionId"] == "deny"
+    failed_tool = next(
+        m["message"] for m in deny_msgs
+        if m.get("message", {}).get("method") == "session/update"
+        and m["message"]["params"].get("update", {}).get("status") == "failed"
+    )
+    assert failed_tool["params"]["update"]["toolCallId"]
+
+    # Resume run
+    resume_msgs = load_fixture("resume_run.jsonl")
+    load_req = next(m["message"] for m in resume_msgs if m.get("message", {}).get("method") == "session/load")
+    assert load_req["params"]["sessionId"]
