@@ -123,10 +123,16 @@ class RunManager:
             await run.emit({"type": "error", "message": f"{type(e).__name__}: {e}"})
         finally:
             self.keep_awake.release()
-            if self.store.exists(chat["id"]):  # not deleted while the turn was running
-                chat["messages"].append(
+            try:
+                fresh = self.store.get(chat["id"])
+            except KeyError:
+                fresh = None  # deleted while the reply was running: do not bring it back
+            if fresh is not None:
+                fresh["messages"].append(
                     {"role": "assistant", "run_id": run.id, "events": _compact(run.events), "ts": time.time()}
                 )
-                chat["updated"] = time.time()
-                self.store.save(chat)
+                if chat.get("session_id"):
+                    fresh["session_id"] = chat["session_id"]
+                fresh["updated"] = time.time()
+                self.store.save(fresh)
             await run.finish()  # after persisting, so readers never miss the saved message

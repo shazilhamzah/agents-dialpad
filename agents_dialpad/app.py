@@ -7,12 +7,12 @@ import re
 import secrets
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, pairing
+from . import config, export, pairing
 from .keepawake import KeepAwake
 from .providers import PLANNED, PROVIDERS
 from .runs import RunManager
@@ -36,6 +36,8 @@ class NewChat(BaseModel):
 
 class ChatPatch(BaseModel):
     model: str | None = None
+    title: str | None = Field(default=None, max_length=80)
+    pinned: bool | None = None
 
 
 class NewMessage(BaseModel):
@@ -141,8 +143,8 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         return {"providers": out}
 
     @api.get("/chats")
-    def list_chats():
-        chats = store.list()
+    def list_chats(q: str = Query(default="", max_length=100)):
+        chats = store.search(q) if q else store.list()
         for c in chats:
             c["running"] = runs.active(c["id"]) is not None
         return {"chats": chats, "usage": runs.usage}
@@ -161,15 +163,39 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
 
     @api.patch("/chats/{chat_id}")
     async def patch_chat(chat_id: str, body: ChatPatch):
-        """Change the model; applies from the next message."""
+        """Change the model, title or pin state."""
         chat = chat_or_404(chat_id)
-        if runs.active(chat_id):
-            raise HTTPException(409, "Wait for the current reply to finish before changing the model")
         if body.model is not None:
+            if runs.active(chat_id):
+                raise HTTPException(409, "Wait for the current reply to finish before changing the model")
             await check_model(PROVIDERS[chat["provider"]], body.model)
             chat["model"] = body.model
-            store.save(chat)
-        return {"model": chat.get("model", "")}
+        if body.title is not None:
+            t = " ".join(body.title.split())
+            if not t:
+                raise HTTPException(400, "Title can't be empty")
+            chat["title"] = t
+        if body.pinned is not None:
+            chat["pinned"] = body.pinned
+        store.save(chat)
+        out = {"model": chat.get("model", "")}
+        if body.title is not None or body.pinned is not None:
+            out["title"] = chat.get("title", "")
+            out["pinned"] = bool(chat.get("pinned", False))
+        return out
+
+    @api.get("/chats/{chat_id}/export")
+    def export_chat(chat_id: str):
+        chat = chat_or_404(chat_id)
+        prov = PROVIDERS.get(chat["provider"])
+        label = prov.label if prov else chat["provider"]
+        md = export.chat_to_markdown(chat, label)
+        fname = export.filename_for(chat)
+        return Response(
+            content=md,
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
 
     @api.get("/chats/{chat_id}")
     def get_chat(chat_id: str):

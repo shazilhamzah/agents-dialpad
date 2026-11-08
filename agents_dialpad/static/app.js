@@ -31,6 +31,10 @@ const ICON = {
   chev: '<path d="m6 9 6 6 6-6"/>',
   chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM21 14v.01M14 21h.01M17 21h4v-4"/>',
+  pin: '<path d="M12 17v5M9 10.76V6h6v4.76l2 2.24v2H7v-2z"/><path d="M9 6V3h6v3"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[n]}</svg>`;
 
@@ -61,7 +65,7 @@ const getJSON = async (p, o) => (await api(p, o)).json();
 function forgetToken() { LS.del('ag_token'); token = null; }
 
 /* ===================== state ===================== */
-const state = { chats: [], sig: '', info: null, drafts: {}, openTools: new Set() };
+const state = { chats: [], sig: '', info: null, drafts: {}, openTools: new Set(), query: '' };
 let cur = null;           // open conversation: { chat, live: {events}|null, ctrl, gen }
 let stick = true;         // keep the view pinned to the newest text unless the reader scrolled up
 let renderQueued = false;
@@ -178,6 +182,7 @@ function mountShell() {
         <button class="icon-btn" id="btn-side-more" type="button" aria-label="More" aria-haspopup="menu" aria-expanded="false">${icon('more')}</button>
         <button class="icon-btn solid" id="btn-new" type="button" aria-label="New chat">${icon('plus')}</button>
       </header>
+      <div class="search">${icon('search')}<label class="sr" for="q">Search chats</label><input id="q" type="search" placeholder="Search chats" autocomplete="off" enterkeyhint="search"></div>
       <nav class="chats" id="chat-list" aria-label="Chat list"></nav>
     </aside>
     <main class="pane" id="pane"></main>
@@ -185,6 +190,22 @@ function mountShell() {
   $('#btn-limits').onclick = openLimits;
   $('#btn-side-more').onclick = (e) => { if ($('#menu')) return closeMenu(); openMenu(e.currentTarget, sideMenuItems()); };
   $('#btn-new').onclick = openNewChat;
+  const qInput = $('#q');
+  let qTimer = null;
+  qInput.oninput = () => {
+    clearTimeout(qTimer);
+    qTimer = setTimeout(async () => {
+      state.query = qInput.value.trim();
+      if (!state.query) {
+        renderList();
+      } else {
+        try {
+          const d = await getJSON('/chats?q=' + encodeURIComponent(state.query));
+          renderSearchResults(d.chats);
+        } catch (e) { handleErr(e); }
+      }
+    }, 250);
+  };
   renderList();
   loadInfo().then(() => { renderList(); updateHeader(); }).catch(() => {});   // agent + model names for the list and header
 }
@@ -204,6 +225,7 @@ async function openPair() {
 
 function renderList() {
   const list = $('#chat-list'); if (!list) return;
+  if (state.query) return;
   if (!state.chats.length) {
     list.innerHTML = `<div class="empty">${icon('chat')}<p><b>No chats yet</b></p>
       <p>Start one to talk to an agent running on this computer.</p><button class="btn" id="empty-new" type="button">New chat</button></div>`;
@@ -211,16 +233,45 @@ function renderList() {
     return;
   }
   const activeId = cur && cur.chat.id;
-  list.innerHTML = state.chats.map((c) => `
+  const pinned = state.chats.filter((c) => c.pinned);
+  const recent = state.chats.filter((c) => !c.pinned);
+  const rowHTML = (c) => `
     <a class="chat-row" href="#/c/${c.id}"${c.id === activeId ? ' aria-current="page"' : ''}>
       <span class="t"><span class="title">${esc(c.title)}</span>
       <span class="meta">${esc(providerLabel(c.provider))} · ${esc(c.project)} · ${esc(timeAgo(c.updated))}</span></span>
+      ${c.pinned ? `<span class="pin-badge" aria-hidden="true">${icon('pin')}</span>` : ''}
+      ${c.running ? '<span class="dot" role="img" aria-label="Running"></span>' : ''}
+    </a>`;
+
+  let html = '';
+  if (pinned.length) {
+    html += '<div class="chat-sec-label">Pinned</div>' + pinned.map(rowHTML).join('');
+    if (recent.length) html += '<div class="chat-sec-label">Recent</div>' + recent.map(rowHTML).join('');
+  } else {
+    html = recent.map(rowHTML).join('');
+  }
+  list.innerHTML = html;
+}
+
+function renderSearchResults(results) {
+  const list = $('#chat-list'); if (!list) return;
+  if (!results.length) {
+    list.innerHTML = `<div class="empty"><p class="note">No chats match “${esc(state.query)}”.</p></div>`;
+    return;
+  }
+  const activeId = cur && cur.chat.id;
+  list.innerHTML = results.map((c) => `
+    <a class="chat-row" href="#/c/${c.id}"${c.id === activeId ? ' aria-current="page"' : ''}>
+      <span class="t"><span class="title">${esc(c.title)}</span>
+      ${c.snippet ? `<span class="snip">${esc(c.snippet)}</span>` : ''}
+      <span class="meta">${esc(providerLabel(c.provider))} · ${esc(c.project)} · ${esc(timeAgo(c.updated))}</span></span>
+      ${c.pinned ? `<span class="pin-badge" aria-hidden="true">${icon('pin')}</span>` : ''}
       ${c.running ? '<span class="dot" role="img" aria-label="Running"></span>' : ''}
     </a>`).join('');
 }
 
 async function refreshList() {
-  if (!$('.shell')) return;
+  if (!$('.shell') || state.query) return;
   try {
     const d = await getJSON('/chats');
     const sig = JSON.stringify(d.chats);
@@ -388,6 +439,9 @@ function buildPane() {
   $('#btn-more').onclick = (e) => {
     if ($('#menu')) return closeMenu();
     openMenu(e.currentTarget, [
+      { icon: 'edit', label: 'Rename', run: renameChat },
+      { icon: 'pin', label: cur.chat.pinned ? 'Unpin' : 'Pin', run: togglePin },
+      { icon: 'download', label: 'Export as Markdown', run: exportChat },
       { icon: 'gauge', label: 'Usage limits', run: openLimits },
       { icon: 'trash', label: 'Delete chat', danger: true, run: deleteChat },
     ]);
@@ -415,6 +469,57 @@ function updateHeader() {
 }
 
 function autosize() { const t = $('#input'); if (!t) return; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, window.innerHeight * 0.38) + 'px'; }
+
+async function renameChat() {
+  if (!cur) return;
+  const chat = cur.chat;
+  const dlg = openSheet(`<form id="f-rename"><h2>Rename chat</h2>
+    <label for="r-title">Chat name</label>
+    <input id="r-title" type="text" maxlength="80" value="${esc(chat.title)}" required>
+    <div class="actions"><button class="btn secondary" type="button" data-close>Cancel</button><button class="btn" type="submit" id="r-go">Save</button></div></form>`, 'Rename chat');
+  $('[data-close]', dlg).onclick = () => dlg.close();
+  $('#f-rename', dlg).onsubmit = async (e) => {
+    e.preventDefault();
+    const val = $('#r-title', dlg).value.trim();
+    if (!val) return;
+    const go = $('#r-go', dlg); go.setAttribute('aria-busy', 'true');
+    try {
+      const r = await getJSON('/chats/' + chat.id, { method: 'PATCH', body: JSON.stringify({ title: val }) });
+      chat.title = r.title;
+      dlg.close();
+      updateHeader();
+      refreshList();
+    } catch (err) { go.removeAttribute('aria-busy'); handleErr(err); }
+  };
+}
+
+async function togglePin() {
+  if (!cur) return;
+  const chat = cur.chat;
+  const next = !chat.pinned;
+  try {
+    const r = await getJSON('/chats/' + chat.id, { method: 'PATCH', body: JSON.stringify({ pinned: next }) });
+    chat.pinned = r.pinned;
+    toast(r.pinned ? 'Pinned' : 'Unpinned');
+    refreshList();
+  } catch (err) { handleErr(err); }
+}
+
+async function exportChat() {
+  if (!cur) return;
+  try {
+    const r = await api('/chats/' + cur.chat.id + '/export');
+    const blob = await r.blob();
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="([^"]+)"/);
+    const fname = m ? m[1] : 'chat.md';
+    const u = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = u; a.download = fname;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 10000);
+  } catch (e) { handleErr(e); }
+}
 
 async function deleteChat() {
   if (!cur) return;

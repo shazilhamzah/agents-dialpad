@@ -6,6 +6,7 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 ## [Unreleased]
 
 ### Added
+- **Chat housekeeping:** rename, pin to top, search titles and message content, and export as Markdown.
 - **QR code pairing:** `agents-dialpad pair` prints a QR code in the terminal; the sidebar **More → Pair a device**
   menu item shows the same code in the web app.
 - Keeps the computer awake while an agent is working (`keep_awake`).
@@ -26,6 +27,9 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 - Relative project paths in `config.json` are now relative to the data folder.
 - `serve` no longer prints the access token unless it is attached to a terminal (the token no longer lands in log files).
 - `app.create_app()` builds an independent app, which is what lets the tests run many isolated apps.
+
+### Fixed
+- Merge-safe saving: a finishing reply no longer overwrites changes made meanwhile (such as a rename).
 
 ## [0.1.0] - 2026-11-08
 

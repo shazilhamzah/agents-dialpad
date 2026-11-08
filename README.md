@@ -169,6 +169,13 @@ Tap **Limits**. Antigravity's quota (five-hour and weekly windows per model fami
 with no model call, cached for 60 s. Claude Code's windows come from the last reply it sent, so they appear after
 your first Claude message.
 
+## Organising chats
+
+- **Rename:** In a chat, tap **More → Rename** to give it a descriptive name.
+- **Pin:** Tap **More → Pin** to keep important conversations at the top of your chat list.
+- **Search:** Use the search bar above the chat list to search across titles, user messages and agent replies.
+- **Export:** Tap **More → Export as Markdown** to download the whole conversation as a clean `.md` file.
+
 ## Project layout
 
 - `agents_dialpad/app.py`: HTTP API (`/api/...`, bearer token) and static files; `create_app()` builds an independent app

@@ -69,7 +69,7 @@ Tips for the person supervising:
 
 - [x] A1 Keep awake
 - [x] A2 QR pairing + sidebar menu
-- [ ] A3 Chat housekeeping + safe saving
+- [x] A3 Chat housekeeping + safe saving
 - [ ] A4 Quick commands
 - [ ] B1 Push notifications
 - [ ] B2 Change viewer

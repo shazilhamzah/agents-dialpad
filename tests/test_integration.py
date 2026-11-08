@@ -344,3 +344,91 @@ def test_pair_endpoint_returns_a_qr_and_needs_the_token(env, monkeypatch):
         assert data["remote"] is False
 
 
+# --------------------------------------------------------------------------- chat housekeeping (A3)
+def test_renaming_while_a_reply_runs_is_not_lost(env):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h)
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "SLOW"})
+        time.sleep(1)
+        r = client.patch(f"/api/chats/{cid}", headers=h, json={"title": "Renamed"})
+        assert r.status_code == 200
+        client.post(f"/api/chats/{cid}/stop", headers=h)
+        wait_until_idle(client, h, cid)
+        chat = client.get(f"/api/chats/{cid}", headers=h).json()
+        assert chat["title"] == "Renamed"
+        assert len(chat["messages"]) >= 2
+        assert chat["messages"][-1]["role"] == "assistant"
+
+
+def test_rename_validates_the_title(env):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h)
+        assert client.patch(f"/api/chats/{cid}", headers=h, json={"title": ""}).status_code == 400
+        assert client.patch(f"/api/chats/{cid}", headers=h, json={"title": "   "}).status_code == 400
+        assert client.patch(f"/api/chats/{cid}", headers=h, json={"title": "a" * 81}).status_code in (400, 422)
+        r = client.patch(f"/api/chats/{cid}", headers=h, json={"title": "Valid Title"})
+        assert r.status_code == 200
+        assert r.json()["title"] == "Valid Title"
+
+
+def test_model_change_is_still_refused_while_running(env):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h)
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "SLOW"})
+        time.sleep(1)
+        r = client.patch(f"/api/chats/{cid}", headers=h, json={"model": "claude-haiku-5-5"})
+        assert r.status_code == 409
+        client.post(f"/api/chats/{cid}/stop", headers=h)
+        wait_until_idle(client, h, cid)
+
+
+def test_pinned_chats_come_first(env):
+    client, h = env()
+    with client:
+        a = new_chat(client, h)
+        time.sleep(0.05)
+        b = new_chat(client, h)
+        time.sleep(0.05)
+        c = new_chat(client, h)
+        chats = client.get("/api/chats", headers=h).json()["chats"]
+        assert [x["id"] for x in chats[:3]] == [c, b, a]
+        client.patch(f"/api/chats/{a}", headers=h, json={"pinned": True})
+        chats_after = client.get("/api/chats", headers=h).json()["chats"]
+        assert chats_after[0]["id"] == a
+        assert chats_after[0]["pinned"] is True
+
+
+def test_search_finds_titles_and_message_text(env):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h)
+        turn(client, h, cid, "ping pong test")
+        wait_until_idle(client, h, cid)
+        res = client.get("/api/chats?q=pong", headers=h).json()["chats"]
+        assert len(res) == 1
+        assert res[0]["id"] == cid
+        assert "snippet" in res[0]
+        assert "pong" in res[0]["snippet"].lower()
+        res_empty = client.get("/api/chats?q=zzznonexistent", headers=h).json()["chats"]
+        assert res_empty == []
+
+
+def test_export_returns_markdown_with_the_conversation(env):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h)
+        turn(client, h, cid, "hello export")
+        wait_until_idle(client, h, cid)
+        r = client.get(f"/api/chats/{cid}/export", headers=h)
+        assert r.status_code == 200
+        cd = r.headers.get("content-disposition", "")
+        assert cd.endswith('.md"') or ".md" in cd
+        body = r.text
+        assert body.startswith("# ")
+        assert "## You" in body
+        assert "hello export" in body
+
+
