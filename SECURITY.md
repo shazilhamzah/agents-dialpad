@@ -1,0 +1,30 @@
+# Security
+
+agents-dialpad gives a web page the ability to start coding agents on your computer. Treat it like remote shell
+access and deploy it accordingly.
+
+## Threat model
+
+- **Anyone who has your access token controls your agents.** In "Full access" that means running commands as
+  your user. The token is a bearer secret; keep it out of screenshots, chat logs and shared links.
+- **Never expose agents-dialpad to the public internet.** Run it on `127.0.0.1` behind a private network such as
+  Tailscale (use `tailscale serve`, not Funnel). There is no rate limiting, no per-user accounts and no audit log.
+- **Prompt injection is real.** An agent that reads an untrusted file, web page or repo can be told to do
+  things. In "Full access" it can act on them without asking. Use "Read-only" or "Can edit files" for untrusted
+  projects.
+- **Project folders are an allowlist.** The phone can only choose folders listed in `data/config.json`; it
+  cannot supply a path. The agent itself is not sandboxed to that folder by agents-dialpad.
+- **Provider logins are never read.** agents-dialpad only launches the official CLIs. It stores chat transcripts and
+  your token under `data/` (git-ignored), unencrypted, so protect that folder like any other secret.
+- The token travels in the URL **fragment** (`#token=`), which browsers do not send to servers, and is removed
+  from the address bar after first use. API calls use an `Authorization` header.
+
+## Supported versions
+
+Only the latest commit on the default branch is supported while the project is a prototype.
+
+## Reporting a vulnerability
+
+Please **do not open a public issue**. Use GitHub's private reporting: the repository's **Security** tab →
+**Report a vulnerability**. Include what you found, how to reproduce it, and the impact. You should get a first
+response within a few days; this is a volunteer project, so there is no guaranteed timeline.

@@ -1,0 +1,20 @@
+# Your private data: access token, chats, config, logs. Never commit.
+data/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets and local tooling
+.env
+.env.*
+*.log
+.claude/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

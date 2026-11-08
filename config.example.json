@@ -1,0 +1,10 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "projects": {
+    "workspace": "data/workspace",
+    "my-app": "C:\\path\\to\\my-app"
+  },
+  "instructions_file": null,
+  "allow_full_access": false
+}
