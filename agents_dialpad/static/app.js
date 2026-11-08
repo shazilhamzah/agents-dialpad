@@ -39,6 +39,7 @@ const ICON = {
   diff: '<path d="M12 3v14M5 10h14M5 21h14"/>',
   clip: '<path d="m21 12-8.5 8.5a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.66 5.66l-9 9a2 2 0 0 1-2.83-2.83L15 7"/>',
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+  phone: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[n]}</svg>`;
 
@@ -314,6 +315,7 @@ function sideMenuItems() {
   const hasPush = LS.get('ag_push') === '1';
   const items = [
     { icon: 'qr', label: 'Pair a device', run: openPair },
+    { icon: 'phone', label: 'Devices', run: openDevices },
   ];
   if (hasPush) {
     items.push({ icon: 'bell', label: 'Turn off notifications', run: disablePush });
@@ -323,6 +325,95 @@ function sideMenuItems() {
   }
   return items;
 }
+async function openDevices() {
+  let data;
+  try {
+    data = await getJSON('/devices');
+  } catch (e) {
+    return handleErr(e);
+  }
+  const isOwner = (data.me === 'owner');
+  const dlg = openSheet(`
+    <h2>Devices</h2>
+    <p class="lede">Each paired phone or tablet has its own token.</p>
+    <div class="devices-list" id="dev-list"></div>
+    ${isOwner ? '<button class="btn" type="button" id="btn-add-dev" style="width:100%; margin-top:12px;">Add a device</button>' : '<p class="note">Devices can only be added or revoked from the computer.</p>'}
+    <div class="actions"><button class="btn secondary" type="button" data-close>Close</button></div>
+  `, 'Devices');
+  $('[data-close]', dlg).onclick = () => dlg.close();
+
+  function renderDevList(devs) {
+    const listEl = $('#dev-list', dlg);
+    if (!devs.length) {
+      listEl.innerHTML = '<p class="note">No devices paired yet.</p>';
+      return;
+    }
+    listEl.innerHTML = devs.map(d => {
+      const isThis = (d.id === data.me);
+      const seen = d.last_seen ? `Last used ${timeAgo(d.last_seen)}` : 'Never used';
+      return `
+        <div class="device-row">
+          <div class="device-info">
+            <span class="device-name">${esc(d.name)}${isThis ? ' <span class="this-tag">(This device)</span>' : ''}</span>
+            <span class="device-seen">${esc(seen)}</span>
+          </div>
+          ${isOwner ? `<button class="btn secondary danger btn-sm" type="button" data-revoke="${esc(d.id)}" data-name="${esc(d.name)}">Revoke</button>` : ''}
+        </div>
+      `;
+    }).join('');
+
+    if (isOwner) {
+      $$('[data-revoke]', listEl).forEach(btn => {
+        btn.onclick = async () => {
+          const name = btn.dataset.name;
+          const id = btn.dataset.revoke;
+          const ok = await confirmSheet({
+            title: 'Revoke device?',
+            body: `Revoke ${name}? It will be signed out immediately.`,
+            confirm: 'Revoke',
+            danger: true,
+          });
+          if (!ok) return;
+          try {
+            await api(`/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            toast('Device revoked');
+            data.devices = data.devices.filter(x => x.id !== id);
+            renderDevList(data.devices);
+          } catch (err) {
+            handleErr(err);
+          }
+        };
+      });
+    }
+  }
+
+  renderDevList(data.devices);
+
+  if (isOwner) {
+    $('#btn-add-dev', dlg).onclick = async () => {
+      const name = prompt('Device name (e.g. My Phone):');
+      if (!name || !name.trim()) return;
+      try {
+        const res = await getJSON('/devices', {
+          method: 'POST',
+          body: JSON.stringify({ name: name.trim() }),
+        });
+        dlg.close();
+        const pairDlg = openSheet(`
+          <h2>Pair device</h2>
+          <p class="lede">Scan with your phone's camera to connect <b>${esc(res.device.name)}</b>.</p>
+          <div class="qr"><img src="${res.qr}" alt="QR code to pair"></div>
+          <p class="note"><a href="${res.url}" target="_blank" rel="noopener">Open link directly</a></p>
+          <div class="actions"><button class="btn" type="button" data-close>Done</button></div>
+        `, 'Pair device');
+        $('[data-close]', pairDlg).onclick = () => pairDlg.close();
+      } catch (err) {
+        handleErr(err);
+      }
+    };
+  }
+}
+
 async function openPair() {
   let data;
   try { data = await getJSON('/pair'); } catch (e) { return handleErr(e); }

@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from pathlib import Path
 import sys
-from . import config, desk, export, gitview, pairing, push, quick, uploads
+from . import config, desk, devices, export, gitview, pairing, push, quick, uploads
 from .keepawake import KeepAwake
 from .providers import PLANNED, PROVIDERS
 from .runs import RunManager
@@ -60,6 +60,10 @@ class RevertPath(BaseModel):
     path: str
 
 
+class NewDevice(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+
+
 class ImportChat(BaseModel):
     project: str
     session_id: str = Field(pattern=r"^[0-9a-f-]{36}$")
@@ -97,12 +101,24 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         """'Full access' only exists when `"allow_full_access": true` is set in config.json."""
         return BASE_MODES + ([FULL_MODE] if cfg.get("allow_full_access") else [])
 
-    def require_token(authorization: str | None = Header(default=None)) -> None:
-        supplied = authorization[7:] if authorization and authorization.startswith("Bearer ") else ""
-        if not secrets.compare_digest(supplied.encode(), token.encode()):
-            raise HTTPException(401, "Invalid or missing token")
+    devs = devices.Devices(config.DATA / "devices.json")
 
-    api = APIRouter(prefix="/api", dependencies=[Depends(require_token)])
+    def identity(authorization: str | None = Header(default=None)) -> str:
+        supplied = authorization[7:] if authorization and authorization.startswith("Bearer ") else ""
+        if supplied and secrets.compare_digest(supplied.encode(), token.encode()):
+            return "owner"
+        dev = devs.match(supplied) if supplied else None
+        if dev:
+            devs.touch(dev)
+            return dev
+        raise HTTPException(401, "Invalid or missing token")
+
+    def owner_only(who: str = Depends(identity)) -> str:
+        if who != "owner":
+            raise HTTPException(403, "Only the owner token can do this. Use the computer, or `agents-dialpad device`.")
+        return who
+
+    api = APIRouter(prefix="/api", dependencies=[Depends(identity)])
 
     async def check_model(provider, model: str) -> None:
         if model == "":
@@ -120,7 +136,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             raise HTTPException(404, "No such chat") from None
 
     @api.get("/info")
-    async def info():
+    async def info(who: str = Depends(identity)):
         providers = [
             {"name": p.name, "label": p.label, "available": p.available(), "models": await p.models() if p.available() else []}
             for p in PROVIDERS.values()
@@ -132,10 +148,11 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             "usage": runs.usage,
             "keep_awake": keep_awake.enabled,
             "server_os": "windows" if sys.platform.startswith("win") else ("macos" if sys.platform == "darwin" else "linux"),
+            "me": who,
         }
 
     @api.get("/pair")
-    def pair():
+    def pair(_who: str = Depends(owner_only)):
         base = pairing.tailscale_url(cfg["port"])
         link = pairing.pair_link(base or f"http://127.0.0.1:{cfg['port']}/", token)
         return {"url": link, "remote": base is not None, "qr": pairing.qr_svg_data_uri(link)}
@@ -328,6 +345,26 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             raise HTTPException(501, "git is not installed on this computer")
         except TimeoutError:
             raise HTTPException(504, "git took too long")
+
+    @api.get("/devices")
+    def list_devices(who: str = Depends(identity)):
+        return {"devices": devs.list(), "me": who}
+
+    @api.post("/devices")
+    def add_device(body: NewDevice, _who: str = Depends(owner_only)):
+        try:
+            rec, raw_token = devs.add(body.name)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        base = pairing.tailscale_url(cfg["port"])
+        link = pairing.pair_link(base or f"http://127.0.0.1:{cfg['port']}/", raw_token)
+        return {"device": rec, "url": link, "qr": pairing.qr_svg_data_uri(link)}
+
+    @api.delete("/devices/{device_id}")
+    def delete_device(device_id: str, _who: str = Depends(owner_only)):
+        if not devs.revoke(device_id):
+            raise HTTPException(404, "Device not found")
+        return {"ok": True}
 
     @api.patch("/chats/{chat_id}")
     async def patch_chat(chat_id: str, body: ChatPatch):

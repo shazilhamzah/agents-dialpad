@@ -523,3 +523,15 @@ dialog.sheet.wide { width: min(94vw, 60rem); }
   opacity: .9; word-break: break-all;
 }
 .msg-att-chip svg.i { width: .875rem; height: .875rem; flex: none; }
+
+/* devices */
+.devices-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; max-height: 50vh; overflow-y: auto; }
+.device-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px;
+  padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-s);
+}
+.device-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.device-name { font-weight: 600; font-size: .9375rem; }
+.device-seen { font-size: .8125rem; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.this-tag { color: var(--accent-text); font-weight: normal; font-size: .8125rem; }
+.btn-sm { padding: 4px 10px; font-size: .8125rem; min-height: 36px; }

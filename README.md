@@ -64,6 +64,7 @@ git clone https://github.com/shazilhamzah/agents-dialpad.git && cd agents-dialpa
 | `agents-dialpad project add\|list\|remove` | Manage the folders the phone can pick. |
 | `agents-dialpad token [--rotate]` | Show the access token (and the link for a device), or replace it. |
 | `agents-dialpad pair [--png FILE]` | Print a QR code (and link) to connect a phone without typing the URL. |
+| `agents-dialpad device add|list|revoke` | Manage revocable per-device tokens. |
 | `agents-dialpad doctor` | Check Python, config, agent CLIs, the port and Tailscale. Exit code 1 if something blocks you. |
 | `agents-dialpad autostart install\|uninstall\|status` | Start automatically at login (below). `--dry-run` shows what would change. |
 
@@ -215,6 +216,14 @@ Work started at your computer can be picked up on your phone, and vice-versa (Cl
 
 - **Desk to phone:** When creating a new Claude chat, tap **Continue a desktop session** to pick from recent sessions in that project folder. The phone resumes that session (`claude --resume <id>`).
 - **Phone to desk:** In any Claude chat, tap **More → Continue on the computer** to copy the terminal command (`claude --resume <id>`) to run at your desk.
+
+## Devices
+
+Each phone or tablet can have its own revocable token:
+
+- **Add a device:** In the web app on your computer, open **More → Devices → Add a device**, or run `agents-dialpad device add "My Phone"` (or `agents-dialpad pair --device "My Phone"`).
+- **Revoke a device:** In the Devices menu on your computer (or via `agents-dialpad device revoke <id>`), tap **Revoke**. That device is signed out immediately.
+- **Migration advice:** After pairing your phones as individual devices, run `agents-dialpad token --rotate` on the computer. The old shared token stops working, while individual devices continue uninterrupted.
 
 ## Attachments
 

@@ -75,7 +75,7 @@ Tips for the person supervising:
 - [x] B2 Change viewer
 - [x] B3 Desktop sessions
 - [x] B4 Uploads
-- [ ] B5 Device tokens
+- [x] B5 Device tokens
 - [ ] C1 Approvals (spike → Claude → Antigravity)
 - [ ] C2 Codex
 - [ ] C3 Usage and alerts

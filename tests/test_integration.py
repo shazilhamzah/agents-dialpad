@@ -833,3 +833,87 @@ def test_upload_needs_the_token(env):
     with client:
         cid = new_chat(client, h)
     assert client.put(f"/api/chats/{cid}/uploads?name=test.txt", content=b"unauth").status_code == 401
+
+
+# --------------------------------------------------------------------------- device tokens (B5)
+def test_device_token_can_use_the_api(env):
+    client, h_owner = env()
+    with client:
+        # Owner adds a device
+        r = client.post("/api/devices", headers=h_owner, json={"name": "Pixel 9"})
+        assert r.status_code == 200
+        data = r.json()
+        dev_id = data["device"]["id"]
+        # Extract token from the pair URL (#token=...)
+        url = data["url"]
+        dev_token = url.split("#token=")[1]
+
+        h_dev = {"Authorization": f"Bearer {dev_token}"}
+
+        # Device token can list chats and create chat
+        assert client.get("/api/chats", headers=h_dev).status_code == 200
+        cid = new_chat(client, h_dev)
+        assert client.get(f"/api/chats/{cid}", headers=h_dev).status_code == 200
+
+
+def test_revoked_device_token_is_rejected(env):
+    client, h_owner = env()
+    with client:
+        r = client.post("/api/devices", headers=h_owner, json={"name": "iPad"})
+        data = r.json()
+        dev_id = data["device"]["id"]
+        dev_token = data["url"].split("#token=")[1]
+        h_dev = {"Authorization": f"Bearer {dev_token}"}
+
+        assert client.get("/api/chats", headers=h_dev).status_code == 200
+
+        # Owner revokes device
+        r_del = client.delete(f"/api/devices/{dev_id}", headers=h_owner)
+        assert r_del.status_code == 200
+
+        # Device token is now rejected immediately (401)
+        assert client.get("/api/chats", headers=h_dev).status_code == 401
+
+
+def test_devices_cannot_add_or_revoke(env):
+    client, h_owner = env()
+    with client:
+        r = client.post("/api/devices", headers=h_owner, json={"name": "Laptop"})
+        data = r.json()
+        dev_id = data["device"]["id"]
+        dev_token = data["url"].split("#token=")[1]
+        h_dev = {"Authorization": f"Bearer {dev_token}"}
+
+        # Device cannot add another device (403)
+        assert client.post("/api/devices", headers=h_dev, json={"name": "Another"}).status_code == 403
+
+        # Device cannot revoke a device (403)
+        assert client.delete(f"/api/devices/{dev_id}", headers=h_dev).status_code == 403
+
+
+def test_pair_link_is_owner_only(env):
+    client, h_owner = env()
+    with client:
+        assert client.get("/api/pair", headers=h_owner).status_code == 200
+
+        r = client.post("/api/devices", headers=h_owner, json={"name": "Tablet"})
+        dev_token = r.json()["url"].split("#token=")[1]
+        h_dev = {"Authorization": f"Bearer {dev_token}"}
+
+        # Device token cannot call /api/pair (403)
+        assert client.get("/api/pair", headers=h_dev).status_code == 403
+
+
+def test_info_reports_who_is_calling(env):
+    client, h_owner = env()
+    with client:
+        info_owner = client.get("/api/info", headers=h_owner).json()
+        assert info_owner["me"] == "owner"
+
+        r = client.post("/api/devices", headers=h_owner, json={"name": "Phone"})
+        dev_id = r.json()["device"]["id"]
+        dev_token = r.json()["url"].split("#token=")[1]
+        h_dev = {"Authorization": f"Bearer {dev_token}"}
+
+        info_dev = client.get("/api/info", headers=h_dev).json()
+        assert info_dev["me"] == dev_id
