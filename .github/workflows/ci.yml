@@ -21,7 +21,7 @@ jobs:
           - { os: ubuntu-latest, python: "3.11" }   # the oldest supported Python
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python }}
