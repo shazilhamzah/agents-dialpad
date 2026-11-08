@@ -209,6 +209,15 @@ your first Claude message.
 - **Search:** Use the search bar above the chat list to search across titles, user messages and agent replies.
 - **Export:** Tap **More → Export as Markdown** to download the whole conversation as a clean `.md` file.
 
+## Reviewing changes
+
+After an agent edits files, tap **More → Changes** in that chat to review what changed:
+
+- View modified, added, deleted, renamed and untracked files compared to the last git commit.
+- Tap any file to inspect its unified diff with color-coded additions and deletions.
+- For tracked files, tap **Revert this file** (with confirmation) to restore the file back to `HEAD`.
+- Reverting is blocked while an agent is actively running in that project.
+
 ## Project layout
 
 - `agents_dialpad/app.py`: HTTP API (`/api/...`, bearer token) and static files; `create_app()` builds an independent app

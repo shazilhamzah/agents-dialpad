@@ -569,3 +569,52 @@ def test_key_route_returns_501_without_pywebpush(env, monkeypatch):
         r = client.get("/api/push/key", headers=h)
         assert r.status_code == 501
         assert "pywebpush is not installed" in r.text
+
+
+# --------------------------------------------------------------------------- change viewer (B2)
+def test_changes_routes_need_the_token_and_a_known_project(env):
+    client, h = env()
+    with client:
+        # 401 without token
+        assert client.get("/api/projects/workspace/changes").status_code == 401
+        assert client.get("/api/projects/workspace/changes/diff?path=file.txt").status_code == 401
+        assert client.post("/api/projects/workspace/changes/revert", json={"path": "file.txt"}).status_code == 401
+
+        # 404 for unknown project
+        assert client.get("/api/projects/unknown_proj/changes", headers=h).status_code == 404
+        assert client.get("/api/projects/unknown_proj/changes/diff?path=file.txt", headers=h).status_code == 404
+        assert client.post("/api/projects/unknown_proj/changes/revert", headers=h, json={"path": "file.txt"}).status_code == 404
+
+
+def test_revert_is_refused_while_an_agent_runs_in_that_project(env, tmp_path):
+    import subprocess
+    ws = tmp_path / "ws"
+    subprocess.run(["git", "-C", str(ws), "init"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(ws), "-c", "user.name=T", "-c", "user.email=t@e", "commit", "--allow-empty", "-m", "init"], capture_output=True, check=True)
+    (ws / "hello.txt").write_text("original\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(ws), "add", "hello.txt"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(ws), "-c", "user.name=T", "-c", "user.email=t@e", "commit", "-m", "add hello"], capture_output=True, check=True)
+
+    # Modify file
+    (ws / "hello.txt").write_text("modified\n", encoding="utf-8")
+
+    client, h = env()
+    with client:
+        cid = new_chat(client, h)
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "SLOW"})
+        time.sleep(1.5)
+
+        # Revert is refused while agent is running
+        r = client.post("/api/projects/workspace/changes/revert", headers=h, json={"path": "hello.txt"})
+        assert r.status_code == 409
+        assert "An agent is working in this project" in r.text
+
+        # Stop turn and wait
+        client.post(f"/api/chats/{cid}/stop", headers=h)
+        wait_until_idle(client, h, cid)
+
+        # Now revert succeeds
+        r2 = client.post("/api/projects/workspace/changes/revert", headers=h, json={"path": "hello.txt"})
+        assert r2.status_code == 200
+        assert r2.json() == {"ok": True}
+        assert (ws / "hello.txt").read_text(encoding="utf-8") == "original\n"

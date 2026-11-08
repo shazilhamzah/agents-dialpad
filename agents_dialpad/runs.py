@@ -20,7 +20,8 @@ from .store import Store
 
 
 class Run:
-    def __init__(self, chat_id: str):
+    def __init__(self, chat_id: str, project: str = ""):
+        self.project = project
         self.id = uuid.uuid4().hex
         self.chat_id = chat_id
         self.events: list[dict] = []
@@ -88,8 +89,11 @@ class RunManager:
         run = self.runs.get(chat_id)
         return run if run and not run.done else None
 
+    def active_in_project(self, project: str) -> bool:
+        return any(r.project == project for r in self.runs.values() if not r.done)
+
     def start(self, chat: dict, text: str) -> Run:
-        run = Run(chat["id"])
+        run = Run(chat["id"], project=chat.get("project", ""))
         self.runs[chat["id"]] = run
         chat["messages"].append({"role": "user", "text": text, "ts": time.time()})
         if chat["title"] == "New chat":

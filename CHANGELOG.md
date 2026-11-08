@@ -6,6 +6,7 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 ## [Unreleased]
 
 ### Added
+- **Change viewer:** Review git status and diffs from the phone (**More → Changes**) and revert uncommitted tracked changes.
 - **Push notifications:** Web Push notifications when a reply finishes, fails, or has blocked commands (requires optional extra gents-dialpad[push]).
 - **Quick commands:** One-tap owner-defined command buttons configured in `config.json` (`quick_commands`).
 - **Chat housekeeping:** rename, pin to top, search titles and message content, and export as Markdown.

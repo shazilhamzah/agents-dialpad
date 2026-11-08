@@ -12,7 +12,8 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, export, pairing, push, quick
+from pathlib import Path
+from . import config, export, gitview, pairing, push, quick
 from .keepawake import KeepAwake
 from .providers import PLANNED, PROVIDERS
 from .runs import RunManager
@@ -51,6 +52,10 @@ class PushSubscribe(BaseModel):
 
 class PushUnsubscribe(BaseModel):
     endpoint: str
+
+
+class RevertPath(BaseModel):
+    path: str
 
 
 def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: KeepAwake | None = None) -> FastAPI:
@@ -239,6 +244,51 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
                 return await quick.run(cmd["run"], cwd, cmd["timeout"])
             except FileNotFoundError as e:
                 raise HTTPException(400, f"'{e}' was not found on this computer's PATH")
+
+    @api.get("/projects/{project}/changes")
+    async def get_project_changes(project: str):
+        if project not in cfg["projects"]:
+            raise HTTPException(404, "Unknown project")
+        root = Path(cfg["projects"][project])
+        try:
+            return await gitview.status(root)
+        except FileNotFoundError:
+            raise HTTPException(501, "git is not installed on this computer")
+        except TimeoutError:
+            raise HTTPException(504, "git took too long")
+
+    @api.get("/projects/{project}/changes/diff")
+    async def get_project_diff(project: str, path: str = Query(...)):
+        if project not in cfg["projects"]:
+            raise HTTPException(404, "Unknown project")
+        root = Path(cfg["projects"][project])
+        try:
+            return await gitview.diff(root, path)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except FileNotFoundError:
+            raise HTTPException(501, "git is not installed on this computer")
+        except TimeoutError:
+            raise HTTPException(504, "git took too long")
+
+    @api.post("/projects/{project}/changes/revert")
+    async def revert_project_file(project: str, body: RevertPath):
+        if project not in cfg["projects"]:
+            raise HTTPException(404, "Unknown project")
+        if runs.active_in_project(project):
+            raise HTTPException(409, "An agent is working in this project; wait for it to finish")
+        root = Path(cfg["projects"][project])
+        try:
+            await gitview.revert(root, body.path)
+            return {"ok": True}
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except LookupError as e:
+            raise HTTPException(409, str(e))
+        except FileNotFoundError:
+            raise HTTPException(501, "git is not installed on this computer")
+        except TimeoutError:
+            raise HTTPException(504, "git took too long")
 
     @api.patch("/chats/{chat_id}")
     async def patch_chat(chat_id: str, body: ChatPatch):

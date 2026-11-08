@@ -36,6 +36,7 @@ const ICON = {
   download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  diff: '<path d="M12 3v14M5 10h14M5 21h14"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[n]}</svg>`;
 
@@ -537,6 +538,7 @@ function buildPane() {
       { icon: 'edit', label: 'Rename', run: renameChat },
       { icon: 'pin', label: cur.chat.pinned ? 'Unpin' : 'Pin', run: togglePin },
       { icon: 'download', label: 'Export as Markdown', run: exportChat },
+      { icon: 'diff', label: 'Changes', run: openChanges },
     ];
     const qCmds = state.quick[chat.project] || [];
     if (qCmds.length) {
@@ -664,6 +666,159 @@ async function openQuickCommands() {
       btns.forEach((btn) => btn.disabled = false);
     }
   };
+}
+
+function formatPath(p) {
+  if (!p || p.length <= 48) return p;
+  const parts = p.split('/');
+  if (parts.length >= 2) return '…/' + parts.slice(-2).join('/');
+  return p.slice(0, 20) + '…' + p.slice(-25);
+}
+
+function renderDiffLines(raw) {
+  if (!raw) return '';
+  const lines = raw.split('\n');
+  return lines.map(line => {
+    let cls = 'ctx';
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ') || line.startsWith('index ')) {
+      cls = 'meta';
+    } else if (line.startsWith('+')) {
+      cls = 'add';
+    } else if (line.startsWith('-')) {
+      cls = 'del';
+    } else if (line.startsWith('@@')) {
+      cls = 'hunk';
+    }
+    return `<div class="dl ${cls}">${esc(line)}</div>`;
+  }).join('');
+}
+
+async function openChanges() {
+  if (!cur || !cur.chat) return;
+  const project = cur.chat.project;
+  const dlg = openSheet('<h2>Changes</h2><p class="lede">Loading…</p>', 'Project changes');
+  dlg.classList.add('wide');
+  const body = $('.sheet-body', dlg);
+
+  async function loadChanges() {
+    let data;
+    try {
+      data = await getJSON(`/projects/${encodeURIComponent(project)}/changes`);
+    } catch (e) {
+      dlg.close();
+      return handleErr(e);
+    }
+    if (!data.is_repo) {
+      body.innerHTML = `
+        <h2>Changes</h2>
+        <p class="lede">This folder is not a git repository</p>
+        <div class="actions"><button class="btn secondary" type="button" id="btn-close">Close</button></div>`;
+      $('#btn-close', body).onclick = () => dlg.close();
+      return;
+    }
+    const files = data.files || [];
+    if (!files.length) {
+      const title = data.branch ? esc(data.branch) : 'Changes';
+      body.innerHTML = `
+        <h2>${title}</h2>
+        <p class="lede">No changes since the last commit</p>
+        <div class="actions"><button class="btn secondary" type="button" id="btn-close">Close</button></div>`;
+      $('#btn-close', body).onclick = () => dlg.close();
+      return;
+    }
+
+    const title = data.branch ? esc(data.branch) : 'Changes';
+    const countText = `${files.length} changed file${files.length === 1 ? '' : 's'}`;
+    const rowsHtml = files.map(f => `
+      <button class="change-row" type="button" data-path="${esc(f.path)}">
+        <span class="change-badge ${esc(f.code)}" aria-label="${esc(f.label)}">${esc(f.code)}</span>
+        <span class="change-path">${esc(formatPath(f.path))}</span>
+        ${f.orig_path ? `<span class="change-orig">(from ${esc(formatPath(f.orig_path))})</span>` : ''}
+      </button>
+    `).join('');
+
+    body.innerHTML = `
+      <h2>${title}</h2>
+      <p class="lede">${countText}</p>
+      <div class="changes-list">${rowsHtml}</div>
+      <div class="actions"><button class="btn secondary" type="button" id="btn-close">Close</button></div>`;
+
+    $('#btn-close', body).onclick = () => dlg.close();
+
+    $$('.change-row', body).forEach(btn => {
+      btn.onclick = () => showDiff(btn.dataset.path);
+    });
+  }
+
+  async function showDiff(filePath) {
+    body.innerHTML = `
+      <div class="diff-top">
+        <div class="diff-top-left">
+          <button class="btn secondary" type="button" id="btn-diff-back">All changes</button>
+          <span class="diff-file-path">${esc(formatPath(filePath))}</span>
+        </div>
+      </div>
+      <p class="lede">Loading diff…</p>`;
+
+    $('#btn-diff-back', body).onclick = () => loadChanges();
+
+    let res;
+    try {
+      res = await getJSON(`/projects/${encodeURIComponent(project)}/changes/diff?path=${encodeURIComponent(filePath)}`);
+    } catch (e) {
+      return handleErr(e);
+    }
+
+    let diffContent = '';
+    if (res.kind === 'binary') {
+      diffContent = '<p class="diff-msg">Binary file, not shown</p>';
+    } else if (res.kind === 'too_large') {
+      diffContent = '<p class="diff-msg">Too large to show</p>';
+    } else {
+      const note = res.truncated ? '<p class="diff-note">Showing the first part only</p>' : '';
+      diffContent = `${note}<div class="diff-lines">${renderDiffLines(res.diff)}</div>`;
+    }
+
+    const canRevert = res.kind !== 'untracked';
+    body.innerHTML = `
+      <div class="diff-top">
+        <div class="diff-top-left">
+          <button class="btn secondary" type="button" id="btn-diff-back">All changes</button>
+          <span class="diff-file-path">${esc(formatPath(filePath))}</span>
+        </div>
+        ${canRevert ? '<button class="btn danger" type="button" id="btn-revert">Revert this file</button>' : ''}
+      </div>
+      <div class="diff-container">${diffContent}</div>
+      <div class="actions"><button class="btn secondary" type="button" id="btn-close">Close</button></div>`;
+
+    $('#btn-diff-back', body).onclick = () => loadChanges();
+    $('#btn-close', body).onclick = () => dlg.close();
+
+    const revertBtn = $('#btn-revert', body);
+    if (revertBtn) {
+      revertBtn.onclick = async () => {
+        const ok = await confirmSheet({
+          title: 'Revert this file?',
+          body: `Your uncommitted changes to ${filePath} will be lost. This can't be undone.`,
+          confirm: 'Revert',
+          danger: true,
+        });
+        if (!ok) return;
+        try {
+          await api(`/projects/${encodeURIComponent(project)}/changes/revert`, {
+            method: 'POST',
+            body: JSON.stringify({ path: filePath }),
+          });
+          toast('Reverted');
+          await loadChanges();
+        } catch (err) {
+          handleErr(err);
+        }
+      };
+    }
+  }
+
+  await loadChanges();
 }
 
 async function exportChat() {

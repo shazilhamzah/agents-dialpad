@@ -27,6 +27,10 @@
   --warn: #8f5200;
   --danger: #c0262d;
   --danger-fill: #c0262d;      /* background of red buttons, with white text */
+  --add-bg: #e6f4ea;
+  --del-bg: #fdecec;
+  --add-mark: var(--ok);
+  --del-mark: var(--danger);
   --user-bg: #1a56e8;
   --user-ink: #ffffff;
   --scrim: rgba(10, 10, 14, .42);
@@ -62,6 +66,10 @@
     --warn: #f0b24a;
     --danger: #ff7b7f;
     --danger-fill: #d63a41;
+    --add-bg: #12331f;
+    --del-bg: #3a1517;
+    --add-mark: var(--ok);
+    --del-mark: var(--danger);
     --user-bg: #2c4fb3;
     --user-ink: #ffffff;
     --scrim: rgba(0, 0, 0, .6);
@@ -399,3 +407,57 @@ dialog.sheet::backdrop { background: var(--scrim); animation: fade-in 200ms var(
 .quick-meta { font-size: .8125rem; font-weight: 600; color: var(--text-3); margin: 14px 0 6px; font-variant-numeric: tabular-nums; }
 .quick-meta.err { color: var(--danger); }
 .quick-out { margin: 6px 0 12px; padding: 12px; max-height: 50vh; overflow: auto; background: var(--surface-2); border-radius: var(--r-m); font: .8125rem/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+dialog.sheet.wide { width: min(94vw, 60rem); }
+
+/* change viewer */
+.change-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 1.75rem; height: 1.5rem; padding: 0 6px; border-radius: 4px;
+  font-family: var(--font-mono); font-size: .8125rem; font-weight: 700; flex: none;
+}
+.change-badge.M { color: var(--warn); background: rgba(143, 82, 0, .12); }
+.change-badge.A { color: var(--ok); background: rgba(29, 122, 67, .12); }
+.change-badge.D { color: var(--danger); background: rgba(192, 38, 45, .12); }
+.change-badge.R { color: var(--accent-text); background: rgba(26, 86, 232, .12); }
+.change-badge.C { color: var(--accent-text); background: rgba(26, 86, 232, .12); }
+.change-badge.U { color: var(--danger); background: rgba(192, 38, 45, .12); }
+.change-badge.\?\? { color: var(--text-3); background: var(--surface-2); }
+
+@media (prefers-color-scheme: dark) {
+  .change-badge.M { background: rgba(240, 178, 74, .18); }
+  .change-badge.A { background: rgba(95, 208, 138, .18); }
+  .change-badge.D { background: rgba(255, 123, 127, .18); }
+  .change-badge.R { background: rgba(122, 167, 255, .18); }
+  .change-badge.C { background: rgba(122, 167, 255, .18); }
+  .change-badge.U { background: rgba(255, 123, 127, .18); }
+}
+
+.changes-list { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; max-height: 60vh; overflow-y: auto; }
+.change-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 10px 12px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-s);
+  text-align: left; cursor: pointer; color: var(--text); font-family: var(--font-ui);
+  transition: background-color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+@media (hover: hover) { .change-row:hover { background: var(--surface-2); border-color: var(--line-strong); } }
+.change-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.change-row .change-path { font-family: var(--font-mono); font-size: .875rem; word-break: break-all; min-width: 0; }
+.change-row .change-orig { color: var(--text-3); font-size: .8125rem; }
+
+.diff-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.diff-top-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.diff-file-path { font-family: var(--font-mono); font-size: .9375rem; font-weight: 600; word-break: break-all; }
+.diff-container {
+  margin: 12px 0; border: 1px solid var(--line); border-radius: var(--r-s); background: var(--surface);
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.45; overflow-x: auto; max-height: 65vh;
+}
+.diff-lines { padding: 6px 0; }
+.dl { white-space: pre; padding: 1px 12px; min-height: 1.45em; }
+.dl.add { background: var(--add-bg); border-left: 3px solid var(--add-mark); padding-left: 9px; }
+.dl.del { background: var(--del-bg); border-left: 3px solid var(--del-mark); padding-left: 9px; }
+.dl.hunk { color: var(--accent-text); font-weight: 600; }
+.dl.meta { color: var(--text-3); }
+.dl.ctx { color: var(--text); }
+.diff-msg { padding: 24px; text-align: center; color: var(--text-3); font-style: italic; }
+.diff-note { padding: 8px 12px; font-size: .8125rem; color: var(--warn); border-bottom: 1px solid var(--line); margin: 0; }

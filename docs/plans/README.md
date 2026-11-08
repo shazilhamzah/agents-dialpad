@@ -72,7 +72,7 @@ Tips for the person supervising:
 - [x] A3 Chat housekeeping + safe saving
 - [x] A4 Quick commands
 - [x] B1 Push notifications
-- [ ] B2 Change viewer
+- [x] B2 Change viewer
 - [ ] B3 Desktop sessions
 - [ ] B4 Uploads
 - [ ] B5 Device tokens
