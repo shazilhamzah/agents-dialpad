@@ -17,6 +17,8 @@ import shutil
 import time
 from typing import AsyncIterator
 
+from ._cmd import extra_args
+
 MODES = {"readonly": "plan", "edit": "accept-edits", "full": "accept-edits"}  # "full" also adds --dangerously-skip-permissions
 MAX_PROMPT_CHARS = 28_000  # Windows command-line limit is ~32k
 REMINDER = "[Keep following the style instructions given at the start of this conversation.]"
@@ -93,7 +95,7 @@ class AntigravityProvider:
         if exe:
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    exe, "models",
+                    exe, *extra_args("AG_AGY_ARGS"), "models",
                     stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
                 )
                 stdout, _ = await asyncio.wait_for(proc.communicate(), 30)
@@ -118,7 +120,7 @@ class AntigravityProvider:
         else:
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    exe, "--output-format", "text", "-p=/usage",
+                    exe, *extra_args("AG_AGY_ARGS"), "--output-format", "text", "-p=/usage",
                     stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
                 )
                 try:
@@ -154,7 +156,7 @@ class AntigravityProvider:
         if len(prompt) > MAX_PROMPT_CHARS:
             raise RuntimeError(f"Message too long for Antigravity ({len(prompt)} chars; limit {MAX_PROMPT_CHARS}).")
 
-        args = [exe, "--output-format", "stream-json", "--mode", MODES.get(chat.get("mode"), "plan")]
+        args = [exe, *extra_args("AG_AGY_ARGS"), "--output-format", "stream-json", "--mode", MODES.get(chat.get("mode"), "plan")]
         if chat.get("mode") == "full":
             args.append("--dangerously-skip-permissions")  # headless cannot prompt; the CLI still blocks its system denylist
         if chat.get("model"):

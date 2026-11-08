@@ -4,7 +4,7 @@ param([switch]$Restart)
 
 Stop-ScheduledTask -TaskName agents-dialpad -ErrorAction SilentlyContinue
 Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
-    Where-Object { $_.CommandLine -match '-m gateway' } |
+    Where-Object { $_.CommandLine -match '-m (agents_dialpad|gateway)' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host "stopped process $($_.ProcessId)" }
 
 if ($Restart) {

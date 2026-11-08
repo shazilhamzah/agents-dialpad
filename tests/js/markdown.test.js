@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { render, inline, safeUrl } = require(process.env.MD_PATH || '../../static/markdown.js');
+const { render, inline, safeUrl } = require(process.env.MD_PATH || '../../agents_dialpad/static/markdown.js');
 
 const has = (html, ...needles) => needles.forEach((n) => assert.ok(html.includes(n), `expected ${JSON.stringify(n)} in:\n${html}`));
 const lacks = (html, ...needles) => needles.forEach((n) => assert.ok(!html.includes(n), `did not expect ${JSON.stringify(n)} in:\n${html}`));

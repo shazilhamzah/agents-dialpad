@@ -7,7 +7,7 @@ import struct
 import zlib
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parent.parent / "static"
+OUT = Path(__file__).resolve().parent.parent / "agents_dialpad" / "static"
 BG = (15, 20, 32)
 FG = (122, 162, 255)
 

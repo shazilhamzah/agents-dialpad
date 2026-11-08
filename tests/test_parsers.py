@@ -1,5 +1,5 @@
 """Output parsers for the agent CLIs. Sample lines mirror real `stream-json` output."""
-from gateway.providers import antigravity, claude
+from agents_dialpad.providers import antigravity, claude
 
 
 def feed_all(parser, objs):

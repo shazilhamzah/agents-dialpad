@@ -10,24 +10,35 @@ permissions:
 
 jobs:
   test:
+    name: test (${{ matrix.os }}, py${{ matrix.python }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - { os: ubuntu-latest, python: "3.13" }
+          - { os: windows-latest, python: "3.13" }
+          - { os: macos-latest, python: "3.13" }
+          - { os: ubuntu-latest, python: "3.11" }   # the oldest supported Python
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
       - name: Install dependencies
         run: uv sync
-      - name: Python tests
+      - name: Python tests (includes fake-agent end-to-end tests)
         run: uv run pytest -q
       - name: Python compiles
-        run: uv run python -m compileall -q gateway
+        run: uv run python -m compileall -q agents_dialpad
       - name: Frontend syntax check
-        run: node --check static/app.js && node --check static/markdown.js && node --check static/sw.js
+        run: node --check agents_dialpad/static/app.js && node --check agents_dialpad/static/markdown.js && node --check agents_dialpad/static/sw.js
       - name: Markdown renderer tests
         run: node --test tests/js/markdown.test.js
+      - name: Build the wheel
+        run: uv build
+      - name: Install the wheel into a clean environment and run it
+        run: uv run python tools/smoke_wheel.py "dist/*.whl"
