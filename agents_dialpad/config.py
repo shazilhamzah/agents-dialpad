@@ -105,6 +105,8 @@ def load() -> tuple[dict, str]:
     cfg.setdefault("codex_models", [])
     # Threshold for low-subscription alerts (percentage). 0 disables.
     cfg.setdefault("limit_alert_percent", 20)
+    # Scheduled prompts to run at specific times (empty by default).
+    cfg.setdefault("schedules", [])
 
     token = os.environ.get("AG_TOKEN") or cfg.get("token")
     if token:

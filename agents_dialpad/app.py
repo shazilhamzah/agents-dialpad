@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
+import logging
 import re
 import secrets
 from datetime import datetime, timezone
@@ -14,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from pathlib import Path
 import sys
-from . import config, desk, devices, export, gitview, pairing, push, quick, uploads
+from . import config, desk, devices, export, gitview, pairing, push, quick, schedules, uploads
 from .keepawake import KeepAwake
 from .providers import PLANNED, PROVIDERS
 from .runs import RunManager
@@ -139,6 +141,85 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         get_limits=get_all_limits,
         notify=notify_limit,
     )
+    sched_state = schedules.State(config.DATA / "schedules-state.json")
+
+    loop_holder: list[asyncio.AbstractEventLoop | None] = [None]
+
+    def start_scheduled(s: dict, now: datetime | None = None) -> dict | None:
+        prov = PROVIDERS.get(s["agent"])
+        if not prov or not prov.available():
+            logging.getLogger("agents-dialpad.schedules").warning("Scheduled prompt '%s': agent '%s' not available", s["name"], s["agent"])
+            return None
+        if s["project"] not in cfg["projects"]:
+            logging.getLogger("agents-dialpad.schedules").warning("Scheduled prompt '%s': project '%s' not available", s["name"], s["project"])
+            return None
+        now_dt = now or datetime.now()
+        date_str = now_dt.strftime("%Y-%m-%d")
+        chat = store.create(s["agent"], s["project"], s["mode"], s.get("model", ""))
+        chat["title"] = f"{s['name']} · {date_str}"
+        store.save(chat)
+        runs.start(chat, s["prompt"])
+        return chat
+
+    def _tick_impl(now_dt: datetime) -> list[str]:
+        valid_scheds, _ = schedules.normalize(cfg.get("schedules", []), cfg)
+        started = []
+        for s in valid_scheds:
+            last_run = sched_state.get(s["name"])
+            if schedules.is_due(s, now_dt, last_run):
+                sched_state.set_run(s["name"], now_dt.strftime("%Y-%m-%d"))
+                chat = start_scheduled(s, now_dt)
+                if chat:
+                    started.append(chat["id"])
+        return started
+
+    def scheduler_tick(now: datetime | None = None) -> list[str]:
+        now_dt = now or datetime.now()
+        loop = loop_holder[0]
+        try:
+            asyncio.get_running_loop()
+            in_loop = True
+        except RuntimeError:
+            in_loop = False
+
+        if not in_loop and loop is not None and loop.is_running():
+            import concurrent.futures
+            fut = concurrent.futures.Future()
+            def run_in_loop():
+                try:
+                    fut.set_result(_tick_impl(now_dt))
+                except Exception as ex:
+                    fut.set_exception(ex)
+            loop.call_soon_threadsafe(run_in_loop)
+            return fut.result(timeout=10)
+        return _tick_impl(now_dt)
+
+    async def scheduler_loop():
+        while True:
+            try:
+                scheduler_tick()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                pass
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                break
+
+    @asynccontextmanager
+    async def lifespan(app_instance: FastAPI):
+        loop_holder[0] = asyncio.get_running_loop()
+        app_instance.state.loop = loop_holder[0]
+        task = asyncio.create_task(scheduler_loop())
+        try:
+            yield
+        finally:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
 
     def modes() -> list[dict]:
         """'Full access' only exists when `"allow_full_access": true` is set in config.json."""
@@ -196,6 +277,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             }
             for p in PROVIDERS.values()
         ]
+        valid_scheds, _ = schedules.normalize(cfg.get("schedules", []), cfg)
         return {
             "providers": providers + [{**p, "available": False, "models": [], "modes": [m for m in modes() if m["id"] != "ask"]} for p in PLANNED],
             "projects": list(cfg["projects"]),
@@ -204,6 +286,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             "keep_awake": keep_awake.enabled,
             "server_os": "windows" if sys.platform.startswith("win") else ("macos" if sys.platform == "darwin" else "linux"),
             "me": who,
+            "has_schedules": len(valid_scheds) > 0,
         }
 
     @api.get("/pair")
@@ -274,6 +357,34 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         if not (1 <= days <= 90):
             raise HTTPException(400, "days must be between 1 and 90")
         return {"days": runs.usage_log.summary(days=days)}
+
+    @api.get("/schedules")
+    def list_schedules():
+        valid_scheds, _ = schedules.normalize(cfg.get("schedules", []), cfg)
+        now = datetime.now()
+        return [
+            {
+                "name": s["name"],
+                "next_run": schedules.next_run(s, now).isoformat(),
+                "last_run": sched_state.get(s["name"]),
+                "project": s["project"],
+                "agent": s["agent"],
+            }
+            for s in valid_scheds
+        ]
+
+    @api.post("/schedules/{name}/run")
+    async def run_schedule_now(name: str):
+        valid_scheds, _ = schedules.normalize(cfg.get("schedules", []), cfg)
+        s = next((x for x in valid_scheds if x["name"] == name), None)
+        if not s:
+            raise HTTPException(404, f"No schedule named '{name}'")
+        now = datetime.now()
+        sched_state.set_run(s["name"], now.strftime("%Y-%m-%d"))
+        chat = start_scheduled(s, now)
+        if not chat:
+            raise HTTPException(400, "Agent or project not available")
+        return {"chat_id": chat["id"]}
 
     @api.get("/chats")
     def list_chats(q: str = Query(default="", max_length=100)):
@@ -559,9 +670,11 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
 
         return StreamingResponse(gen(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store"})
 
-    app = FastAPI(title="agents-dialpad", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="agents-dialpad", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.include_router(api)
     app.mount("/", StaticFiles(directory=config.STATIC, html=True), name="static")
     app.state.runs = runs
     app.state.cfg = cfg
+    app.state.sched_state = sched_state
+    app.scheduler_tick = scheduler_tick
     return app

@@ -40,6 +40,7 @@ const ICON = {
   clip: '<path d="m21 12-8.5 8.5a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.66 5.66l-9 9a2 2 0 0 1-2.83-2.83L15 7"/>',
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
   phone: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[n]}</svg>`;
 
@@ -202,6 +203,7 @@ function mountShell() {
     <aside class="side" aria-label="Chats">
       <header class="bar">
         <div class="titles"><h1>agents-dialpad</h1></div>
+        <button class="icon-btn" id="btn-sched" type="button" aria-label="Schedules" style="display:none">${icon('clock')}</button>
         <button class="icon-btn" id="btn-limits" type="button" aria-label="Usage limits">${icon('gauge')}</button>
         <button class="icon-btn" id="btn-side-more" type="button" aria-label="More" aria-haspopup="menu" aria-expanded="false">${icon('more')}</button>
         <button class="icon-btn solid" id="btn-new" type="button" aria-label="New chat">${icon('plus')}</button>
@@ -211,6 +213,7 @@ function mountShell() {
     </aside>
     <main class="pane" id="pane"></main>
   </div>`;
+  $('#btn-sched').onclick = openSchedules;
   $('#btn-limits').onclick = openLimits;
   $('#btn-side-more').onclick = (e) => { if ($('#menu')) return closeMenu(); openMenu(e.currentTarget, sideMenuItems()); };
   $('#btn-new').onclick = openNewChat;
@@ -231,7 +234,11 @@ function mountShell() {
     }, 250);
   };
   renderList();
-  loadInfo().then(() => { renderList(); updateHeader(); }).catch(() => {});   // agent + model names for the list and header
+  loadInfo().then((info) => {
+    if ($('#btn-sched')) $('#btn-sched').style.display = (info && info.has_schedules) ? '' : 'none';
+    renderList();
+    updateHeader();
+  }).catch(() => {});   // agent + model names for the list and header
 }
 
 function b64urlToUint8(str) {
@@ -323,6 +330,9 @@ function sideMenuItems() {
     items.push({ icon: 'bell', label: 'Send a test notification', run: sendTestPush });
   } else {
     items.push({ icon: 'bell', label: 'Turn on notifications', run: enablePush });
+  }
+  if (state.info && state.info.has_schedules) {
+    items.push({ icon: 'clock', label: 'Schedules', run: openSchedules });
   }
   return items;
 }
@@ -692,6 +702,67 @@ async function openLimits(force) {
     $('#lbody', dlg).innerHTML = limitsHTML(limitsData, usageData);
   }
   catch (e) { dlg.close(); handleErr(e); }
+}
+
+async function openSchedules() {
+  let dlg = $('#sdlg');
+  if (!dlg) {
+    dlg = openSheet(`<h2>Schedules</h2><div id="sbody"><p class="note">Loading…</p></div>
+      <p class="note" style="margin-top:16px">Edit schedules in config.json on the computer.</p>
+      <div class="actions"><button class="btn" type="button" data-close>Done</button></div>`, 'Schedules');
+    dlg.id = 'sdlg';
+    $('[data-close]', dlg).onclick = () => dlg.close();
+  } else $('#sbody', dlg).innerHTML = '<p class="note">Loading…</p>';
+
+  try {
+    const list = await getJSON('/schedules');
+    if (!list.length) {
+      $('#sbody', dlg).innerHTML = '<p class="note">No schedules configured.</p>';
+      return;
+    }
+    const fmtNext = (iso) => {
+      try {
+        const d = new Date(iso);
+        const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const day = days[d.getDay()];
+        const h = String(d.getHours()).padStart(2, '0');
+        const m = String(d.getMinutes()).padStart(2, '0');
+        return `${day} ${h}:${m}`;
+      } catch { return iso; }
+    };
+    $('#sbody', dlg).innerHTML = list.map((s, idx) => `
+      <div class="sched-row">
+        <div class="sched-info">
+          <div class="sched-name">${esc(s.name)}</div>
+          <div class="sched-meta">Next: ${esc(fmtNext(s.next_run))} · Last: ${esc(s.last_run || 'never')} · ${esc(s.project)} (${esc(s.agent)})</div>
+        </div>
+        <button class="btn secondary" type="button" data-run-idx="${idx}">Run now</button>
+      </div>
+    `).join('');
+
+    list.forEach((s, idx) => {
+      const btn = dlg.querySelector(`[data-run-idx="${idx}"]`);
+      if (btn) {
+        btn.onclick = async () => {
+          btn.setAttribute('aria-busy', 'true');
+          btn.disabled = true;
+          try {
+            const res = await postJSON('/schedules/' + encodeURIComponent(s.name) + '/run');
+            dlg.close();
+            location.hash = '#/c/' + res.chat_id;
+            refreshList();
+          } catch (err) {
+            btn.removeAttribute('aria-busy');
+            btn.disabled = false;
+            handleErr(err);
+          }
+        };
+      }
+    });
+  } catch (e) {
+    dlg.close();
+    handleErr(e);
+  }
 }
 
 function handleErr(e) {

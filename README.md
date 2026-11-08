@@ -247,6 +247,29 @@ After an agent edits files, tap **More → Changes** in that chat to review what
 - For tracked files, tap **Revert this file** (with confirmation) to restore the file back to `HEAD`.
 - Reverting is blocked while an agent is actively running in that project.
 
+## Scheduled prompts
+
+You can schedule recurring prompts in `config.json`:
+
+```json
+"schedules": [
+  {
+    "name": "Morning summary",
+    "at": "08:00",
+    "days": ["mon", "tue", "wed", "thu", "fri"],
+    "project": "my-app",
+    "agent": "claude",
+    "mode": "readonly",
+    "model": "",
+    "prompt": "Summarise yesterday's commits in this repository in five bullet points."
+  }
+]
+```
+
+- **Grace window:** A 2-hour grace window covers a computer that was asleep at `at` and woke up shortly after. If the computer was asleep longer than 2 hours past `at`, that day's run is skipped rather than piling up overdue runs.
+- **Awake requirement:** The host computer must be awake at the scheduled time (or wake within the 2-hour grace window) for the schedule to trigger.
+- **UI:** If schedules are configured, a clock icon appears in the header and More menu with next run times and a **Run now** button.
+
 ## Project layout
 
 - `agents_dialpad/app.py`: HTTP API (`/api/...`, bearer token) and static files; `create_app()` builds an independent app

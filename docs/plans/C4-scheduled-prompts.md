@@ -98,6 +98,6 @@ awake (A1 keeps it awake only while a reply runs, not until the schedule time). 
 
 ## Acceptance checklist
 
-- [ ] A schedule runs once per allowed day, never twice, even across restarts.
-- [ ] Missed runs (computer asleep longer than the grace window) are skipped, not piled up.
-- [ ] Full access is never reachable through a schedule unless enabled.
+- [x] A schedule runs once per allowed day, never twice, even across restarts.
+- [x] Missed runs (computer asleep longer than the grace window) are skipped, not piled up.
+- [x] Full access is never reachable through a schedule unless enabled.

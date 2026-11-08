@@ -133,6 +133,19 @@ def test_doctor_is_happy_with_an_agent_cli(data, monkeypatch):
     assert any(c.label.startswith("Claude Code") and c.level == "ok" for c in checks)
 
 
+def test_doctor_warns_on_invalid_schedule(data, monkeypatch):
+    run("init", "--yes")
+    monkeypatch.setenv("AG_CLAUDE", sys.executable)
+    monkeypatch.setenv("AG_AGY", "definitely-not-installed-agy")
+    monkeypatch.setenv("AG_CODEX", "definitely-not-installed-codex")
+    monkeypatch.setattr(doctor_mod, "tailscale_checks", lambda port: [])
+    cfg = json.loads((data / "config.json").read_text(encoding="utf-8"))
+    cfg["schedules"] = [{"name": "Bad", "at": "bad-time", "days": "daily", "project": "workspace", "agent": "claude", "prompt": "hi"}]
+    (data / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    checks = doctor_mod.run_checks()
+    assert any(c.label == "Schedule" and c.level == "warn" for c in checks)
+
+
 # ------------------------------------------------------------------ autostart definitions
 def test_systemd_unit_restarts_and_never_prints_the_token():
     unit = autostart.render_systemd_unit("/usr/bin/python3", "/home/me/.local/share/agents-dialpad")

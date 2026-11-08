@@ -362,6 +362,10 @@ dialog.sheet::backdrop { background: var(--scrim); animation: fade-in 200ms var(
 .usage-bar-claude { background: var(--bar-1); }
 .usage-bar-antigravity { background: var(--bar-2); }
 .usage-bar-codex { background: var(--bar-3); }
+.sched-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); gap: 12px; }
+.sched-info { min-width: 0; flex: 1; }
+.sched-name { font-weight: 600; font-size: .9375rem; margin-bottom: 2px; }
+.sched-meta { font-size: .8125rem; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .note { color: var(--text-3); font-size: .9375rem; margin: 6px 0; }
 
 /* overflow menu */

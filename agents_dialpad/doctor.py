@@ -126,6 +126,11 @@ def run_checks() -> list[Check]:
             prog = cmd["run"][0]
             if not shutil.which(prog):
                 checks.append(Check("warn", f"Quick command '{cmd['label']}'", f"'{prog}' not found on PATH", f"Make sure '{prog}' is installed and on PATH."))
+    if cfg.get("schedules"):
+        from . import schedules
+        _, problems = schedules.normalize(cfg["schedules"], cfg)
+        for prob in problems:
+            checks.append(Check("warn", "Schedule", prob, "Check schedules in config.json."))
     checks.extend(agent_checks())
     checks.append(server_check(cfg["host"], cfg["port"]))
     checks.extend(tailscale_checks(cfg["port"]))

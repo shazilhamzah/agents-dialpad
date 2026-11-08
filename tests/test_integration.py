@@ -1362,3 +1362,71 @@ def test_low_limit_alert_sends_exactly_one_push(env, monkeypatch):
         alerts = [p for p in sent if p.get("tag") == "limits"]
         assert len(alerts) == 1
         assert "% left" in alerts[0]["body"] and "pong" not in alerts[0]["body"]   # no conversation content
+# --------------------------------------------------------------------------- C4 scheduled prompts
+def test_scheduled_prompt_runs_and_records_state(env):
+    from datetime import datetime
+    now = datetime(2026, 11, 9, 8, 30)  # Monday 08:30
+    sched = {
+        "name": "Morning digest",
+        "at": "08:30",
+        "days": ["mon"],
+        "project": "workspace",
+        "agent": "claude",
+        "mode": "readonly",
+        "prompt": "Morning summary",
+    }
+    client, h = env(schedules=[sched])
+    with client:
+        # Before running tick, list schedules
+        res = client.get("/api/schedules", headers=h)
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 1
+        assert data[0]["name"] == "Morning digest"
+        assert data[0]["last_run"] is None
+
+        # Tick at exact time creates a chat
+        started = client.app.scheduler_tick(now)
+        assert len(started) == 1
+        cid = started[0]
+        wait_until_idle(client, h, cid)
+
+        chat = client.get(f"/api/chats/{cid}", headers=h).json()
+        assert chat["title"] == "Morning digest · 2026-11-09"
+        assert len(chat["messages"]) >= 2
+        assert chat["messages"][0]["text"] == "Morning summary"
+
+        # Calling tick again on the same day creates nothing
+        started2 = client.app.scheduler_tick(now)
+        assert len(started2) == 0
+
+        # Status updated
+        data2 = client.get("/api/schedules", headers=h).json()
+        assert data2[0]["last_run"] == "2026-11-09"
+
+
+def test_run_schedule_now_route(env):
+    sched = {
+        "name": "Manual run test",
+        "at": "02:00",
+        "days": ["sun"],
+        "project": "workspace",
+        "agent": "claude",
+        "prompt": "Run now prompt",
+    }
+    client, h = env(schedules=[sched])
+    with client:
+        # Missing auth fails
+        assert client.post("/api/schedules/Manual%20run%20test/run").status_code == 401
+        # Nonexistent fails
+        assert client.post("/api/schedules/Nonexistent/run", headers=h).status_code == 404
+
+        res = client.post("/api/schedules/Manual%20run%20test/run", headers=h)
+        assert res.status_code == 200
+        cid = res.json()["chat_id"]
+        wait_until_idle(client, h, cid)
+        chat = client.get(f"/api/chats/{cid}", headers=h).json()
+        assert "Manual run test" in chat["title"]
+        assert chat["messages"][0]["text"] == "Run now prompt"
+
+
