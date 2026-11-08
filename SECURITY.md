@@ -14,6 +14,7 @@ access and deploy it accordingly.
   projects.
 - **Project folders are an allowlist.** The phone can only choose folders listed in `config.json` (in the data folder); it
   cannot supply a path. The agent itself is not sandboxed to that folder by agents-dialpad.
+- **Quick commands run with your full user rights, whatever the chat's permission level; only list commands you would run yourself.**
 - **Provider logins are never read.** agents-dialpad only launches the official CLIs. It stores chat transcripts and
   your token in the data folder, unencrypted, so protect that folder like any other secret. Background services run with
   `--quiet`, so the token is never written to their logs; `agents-dialpad token` prints it on demand.

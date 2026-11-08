@@ -14,6 +14,7 @@ import time
 import uuid
 
 from .keepawake import KeepAwake
+from .proc import kill_tree
 from .providers import PROVIDERS
 from .store import Store
 
@@ -43,13 +44,7 @@ class Run:
         proc = self.proc
         if not proc or proc.returncode is not None:
             return
-        if os.name == "nt":  # kill the whole tree (the CLI may have spawned shells)
-            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
-        else:
-            try:
-                os.kill(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+        kill_tree(proc.pid)
 
 
 def _compact(events: list[dict]) -> list[dict]:

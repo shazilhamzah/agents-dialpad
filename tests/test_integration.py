@@ -432,3 +432,35 @@ def test_export_returns_markdown_with_the_conversation(env):
         assert "hello export" in body
 
 
+# --------------------------------------------------------------------------- quick commands (A4)
+def test_quick_commands_list_and_run(env):
+    cfg_cmd = {"*": [{"label": "Hi", "run": [sys.executable, "-c", "print(42)"]}]}
+    client, h = env(quick_commands=cfg_cmd)
+    with client:
+        cmds = client.get("/api/projects/workspace/commands", headers=h).json()
+        assert len(cmds) == 1
+        assert cmds[0]["label"] == "Hi"
+        assert cmds[0]["index"] == 0
+        r = client.post("/api/projects/workspace/commands/0", headers=h)
+        assert r.status_code == 200
+        res = r.json()
+        assert res["exit_code"] == 0
+        assert "42" in res["output"]
+
+
+def test_unknown_project_or_index_is_404(env):
+    cfg_cmd = {"*": [{"label": "Hi", "run": [sys.executable, "-c", "print(42)"]}]}
+    client, h = env(quick_commands=cfg_cmd)
+    with client:
+        assert client.get("/api/projects/unknown_proj/commands", headers=h).status_code == 404
+        assert client.post("/api/projects/unknown_proj/commands/0", headers=h).status_code == 404
+        assert client.post("/api/projects/workspace/commands/99", headers=h).status_code == 404
+
+
+def test_quick_commands_need_the_token(env):
+    client, _ = env()
+    with client:
+        assert client.get("/api/projects/workspace/commands").status_code == 401
+        assert client.post("/api/projects/workspace/commands/0").status_code == 401
+
+

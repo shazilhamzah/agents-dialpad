@@ -6,6 +6,7 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 ## [Unreleased]
 
 ### Added
+- **Quick commands:** One-tap owner-defined command buttons configured in `config.json` (`quick_commands`).
 - **Chat housekeeping:** rename, pin to top, search titles and message content, and export as Markdown.
 - **QR code pairing:** `agents-dialpad pair` prints a QR code in the terminal; the sidebar **More → Pair a device**
   menu item shows the same code in the web app.

@@ -65,7 +65,7 @@ const getJSON = async (p, o) => (await api(p, o)).json();
 function forgetToken() { LS.del('ag_token'); token = null; }
 
 /* ===================== state ===================== */
-const state = { chats: [], sig: '', info: null, drafts: {}, openTools: new Set(), query: '' };
+const state = { chats: [], sig: '', info: null, drafts: {}, openTools: new Set(), query: '', quick: {} };
 let cur = null;           // open conversation: { chat, live: {events}|null, ctrl, gen }
 let stick = true;         // keep the view pinned to the newest text unless the reader scrolled up
 let renderQueued = false;
@@ -393,6 +393,10 @@ async function openChat(id) {
   let chat;
   try { chat = await getJSON('/chats/' + id); } catch (e) { location.hash = '#/'; return handleErr(e); }
   if (location.hash !== '#/c/' + id) return;                        // the user moved on while we loaded
+  if (state.quick[chat.project] === undefined) {
+    try { state.quick[chat.project] = await getJSON('/projects/' + encodeURIComponent(chat.project) + '/commands'); }
+    catch { state.quick[chat.project] = []; }
+  }
   cur = { chat, live: null, ctrl: null, gen: 0 };
   state.openTools = new Set();
   buildPane();
@@ -438,13 +442,20 @@ function buildPane() {
   $('#btn-model').onclick = openModelPicker;
   $('#btn-more').onclick = (e) => {
     if ($('#menu')) return closeMenu();
-    openMenu(e.currentTarget, [
+    const items = [
       { icon: 'edit', label: 'Rename', run: renameChat },
       { icon: 'pin', label: cur.chat.pinned ? 'Unpin' : 'Pin', run: togglePin },
       { icon: 'download', label: 'Export as Markdown', run: exportChat },
+    ];
+    const qCmds = state.quick[chat.project] || [];
+    if (qCmds.length) {
+      items.push({ icon: 'term', label: 'Quick commands', run: openQuickCommands });
+    }
+    items.push(
       { icon: 'gauge', label: 'Usage limits', run: openLimits },
       { icon: 'trash', label: 'Delete chat', danger: true, run: deleteChat },
-    ]);
+    );
+    openMenu(e.currentTarget, items);
   };
 
   input.value = state.drafts[chat.id] || '';
@@ -503,6 +514,65 @@ async function togglePin() {
     toast(r.pinned ? 'Pinned' : 'Unpinned');
     refreshList();
   } catch (err) { handleErr(err); }
+}
+
+async function openQuickCommands() {
+  if (!cur) return;
+  const project = cur.chat.project;
+  const cmds = state.quick[project] || [];
+  if (!cmds.length) return;
+
+  const btnHtml = cmds.map((c) =>
+    `<button class="btn secondary quick-btn" type="button" data-idx="${c.index}">${esc(c.label)}</button>`
+  ).join('');
+
+  const dlg = openSheet(`<h2>Quick commands</h2>
+    <p class="lede">Runs in ${esc(project)}. Output appears below.</p>
+    <div class="quick-btns" id="qbtns">${btnHtml}</div>
+    <div id="qres" hidden>
+      <div class="quick-meta" id="qmeta"></div>
+      <pre class="quick-out" id="qout"></pre>
+      <div class="actions"><button class="btn secondary" type="button" id="qcopy">Copy output</button><button class="btn" type="button" data-close>Done</button></div>
+    </div>
+    <div class="actions" id="qactions"><button class="btn secondary" type="button" data-close>Close</button></div>`, 'Quick commands');
+
+  $('[data-close]', dlg).onclick = () => dlg.close();
+  const btns = dlg.querySelectorAll('.quick-btn');
+  const resBox = $('#qres', dlg);
+  const metaBox = $('#qmeta', dlg);
+  const outBox = $('#qout', dlg);
+  const copyBtn = $('#qcopy', dlg);
+  const baseActions = $('#qactions', dlg);
+
+  copyBtn.onclick = async () => {
+    if (await copyText(outBox.textContent)) toast('Output copied');
+  };
+
+  $('#qbtns', dlg).onclick = async (e) => {
+    const b = e.target.closest('.quick-btn');
+    if (!b) return;
+    const idx = b.dataset.idx;
+    btns.forEach((btn) => btn.disabled = true);
+    b.setAttribute('aria-busy', 'true');
+    try {
+      const res = await getJSON('/projects/' + encodeURIComponent(project) + '/commands/' + idx, { method: 'POST' });
+      resBox.hidden = false;
+      baseActions.hidden = true;
+      if (res.timed_out) {
+        metaBox.className = 'quick-meta err';
+        metaBox.textContent = 'Timed out after ' + (res.duration_ms / 1000).toFixed(1) + 's';
+      } else {
+        metaBox.className = 'quick-meta';
+        metaBox.textContent = 'Exit code ' + res.exit_code + ' · ' + (res.duration_ms / 1000).toFixed(1) + 's';
+      }
+      outBox.textContent = res.output || 'No output.';
+    } catch (err) {
+      handleErr(err);
+    } finally {
+      b.removeAttribute('aria-busy');
+      btns.forEach((btn) => btn.disabled = false);
+    }
+  };
 }
 
 async function exportChat() {

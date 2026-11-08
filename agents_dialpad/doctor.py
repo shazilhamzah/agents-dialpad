@@ -118,6 +118,13 @@ def run_checks() -> list[Check]:
         checks.append(Check("ok", "Keep awake while working", "on"))
     if cfg.get("allow_full_access"):
         checks.append(Check("warn", "Full access", "enabled", "Agents can run commands without asking. Only use it on projects you trust."))
+    for problem in cfg.get("_quick_problems", []):
+        checks.append(Check("warn", "Quick commands", problem))
+    for proj_cmds in cfg.get("quick_commands", {}).values():
+        for cmd in proj_cmds:
+            prog = cmd["run"][0]
+            if not shutil.which(prog):
+                checks.append(Check("warn", f"Quick command '{cmd['label']}'", f"'{prog}' not found on PATH", f"Make sure '{prog}' is installed and on PATH."))
     checks.extend(agent_checks())
     checks.append(server_check(cfg["host"], cfg["port"]))
     checks.extend(tailscale_checks(cfg["port"]))

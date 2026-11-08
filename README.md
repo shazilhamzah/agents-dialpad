@@ -163,6 +163,20 @@ approve/deny buttons are on the roadmap.
 your token can then run commands on your machine, and a prompt-injected file in a repo could too. Only use it on
 projects you trust.
 
+## Quick commands
+
+The owner can define one-tap command buttons in `config.json` (global under `"*"` or per project):
+
+```json
+"quick_commands": {
+  "*": [ { "label": "Git status", "run": ["git", "status", "--short"] } ],
+  "my-app": [ { "label": "Run tests", "run": ["npm", "test"], "timeout": 300 } ]
+}
+```
+
+In a chat, tap **More → Quick commands** to run them in the chat's project folder and view the output.
+**These run with your full user rights, whatever the chat's permission level; only list commands you would run yourself.**
+
 ## Usage limits
 
 Tap **Limits**. Antigravity's quota (five-hour and weekly windows per model family) comes from `agy -p=/usage`

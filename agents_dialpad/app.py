@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, export, pairing
+from . import config, export, pairing, quick
 from .keepawake import KeepAwake
 from .providers import PLANNED, PROVIDERS
 from .runs import RunManager
@@ -160,6 +160,33 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             raise HTTPException(400, "Unknown mode")
         await check_model(prov, body.model)
         return store.create(body.provider, body.project, body.mode, body.model)
+
+    quick_locks: dict[str, asyncio.Lock] = {}
+
+    @api.get("/projects/{project}/commands")
+    def list_commands(project: str):
+        if project not in cfg["projects"]:
+            raise HTTPException(404, "Unknown project")
+        cmds = quick.commands_for(cfg.get("quick_commands", {}), project)
+        return [{"index": c["index"], "label": c["label"]} for c in cmds]
+
+    @api.post("/projects/{project}/commands/{index}")
+    async def run_command_endpoint(project: str, index: int):
+        if project not in cfg["projects"]:
+            raise HTTPException(404, "Unknown project")
+        cmds = quick.commands_for(cfg.get("quick_commands", {}), project)
+        cmd = next((c for c in cmds if c["index"] == index), None)
+        if cmd is None:
+            raise HTTPException(404, "Unknown command")
+        lock = quick_locks.setdefault(project, asyncio.Lock())
+        if lock.locked():
+            raise HTTPException(409, "Another quick command is still running in this project")
+        async with lock:
+            cwd = cfg["projects"][project]
+            try:
+                return await quick.run(cmd["run"], cwd, cmd["timeout"])
+            except FileNotFoundError as e:
+                raise HTTPException(400, f"'{e}' was not found on this computer's PATH")
 
     @api.patch("/chats/{chat_id}")
     async def patch_chat(chat_id: str, body: ChatPatch):

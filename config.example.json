@@ -7,5 +7,8 @@
   },
   "instructions_file": null,
   "keep_awake": true,
+  "quick_commands": {
+    "*": [{ "label": "Git status", "run": ["git", "status", "--short"] }]
+  },
   "allow_full_access": false
 }

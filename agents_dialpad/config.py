@@ -91,6 +91,8 @@ def load() -> tuple[dict, str]:
     # Optional text file added to every conversation (none by default). Example: "instructions/caveman.md".
     cfg.setdefault("instructions_file", None)
     cfg.setdefault("keep_awake", True)
+    from . import quick
+    cfg["quick_commands"], cfg["_quick_problems"] = quick.normalize(cfg.get("quick_commands"))
 
     token = os.environ.get("AG_TOKEN") or cfg.get("token")
     if token:
