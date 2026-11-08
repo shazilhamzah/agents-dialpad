@@ -35,6 +35,7 @@ const ICON = {
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
   download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[n]}</svg>`;
 
@@ -210,7 +211,97 @@ function mountShell() {
   loadInfo().then(() => { renderList(); updateHeader(); }).catch(() => {});   // agent + model names for the list and header
 }
 
-function sideMenuItems() { return [{ icon: 'qr', label: 'Pair a device', run: openPair }]; }
+function b64urlToUint8(str) {
+  const pad = '='.repeat((4 - str.length % 4) % 4);
+  const base64 = (str + pad).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+function pushSupported() {
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+
+async function enablePush() {
+  if (!pushSupported()) {
+    if (/iPhone|iPad/.test(navigator.userAgent) && !matchMedia('(display-mode: standalone)').matches) {
+      toast('On iPhone, add agents-dialpad to your Home Screen first, then open it from there.');
+    } else {
+      toast("This browser can't receive notifications.");
+    }
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') {
+    toast('Notifications are blocked in your browser settings.');
+    return;
+  }
+  let keyData;
+  try {
+    keyData = await getJSON('/push/key');
+  } catch (e) {
+    return handleErr(e);
+  }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: b64urlToUint8(keyData.publicKey),
+    });
+    const label = ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || 'device').slice(0, 40);
+    await api('/push/subscribe', {
+      method: 'POST',
+      body: JSON.stringify({ subscription: sub.toJSON(), label }),
+    });
+    LS.set('ag_push', '1');
+    toast('Notifications on');
+  } catch (err) {
+    handleErr(err);
+  }
+}
+
+async function disablePush() {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      await api('/push/unsubscribe', {
+        method: 'POST',
+        body: JSON.stringify({ endpoint: sub.endpoint }),
+      });
+      await sub.unsubscribe();
+    }
+  } catch {
+    /* ignore */
+  }
+  LS.del('ag_push');
+  toast('Notifications off');
+}
+
+async function sendTestPush() {
+  try {
+    const r = await getJSON('/push/test', { method: 'POST' });
+    toast(r.sent > 0 ? 'Test notification sent' : 'No devices subscribed');
+  } catch (e) {
+    handleErr(e);
+  }
+}
+
+function sideMenuItems() {
+  const hasPush = LS.get('ag_push') === '1';
+  const items = [
+    { icon: 'qr', label: 'Pair a device', run: openPair },
+  ];
+  if (hasPush) {
+    items.push({ icon: 'bell', label: 'Turn off notifications', run: disablePush });
+    items.push({ icon: 'bell', label: 'Send a test notification', run: sendTestPush });
+  } else {
+    items.push({ icon: 'bell', label: 'Turn on notifications', run: enablePush });
+  }
+  return items;
+}
 async function openPair() {
   let data;
   try { data = await getJSON('/pair'); } catch (e) { return handleErr(e); }

@@ -122,6 +122,8 @@ Everything lives in `config.json` in the data folder (see [`config.example.json`
 | `instructions_file` | Optional text file added to every conversation. Default `null` (none). Re-read every turn. See below. |
 | `keep_awake` | Prevent idle sleep while an agent reply is running. Default `true`. |
 | `allow_full_access` | `true` adds the **Full access** permission level (see below). Default off. |
+| `push_show_titles` | Include chat title in push notifications (`false` by default for privacy). |
+| `push_contact` | VAPID `sub` claim (`mailto:` address). Default: `mailto:agents-dialpad@example.com`. |
 
 ### Access token
 
@@ -177,6 +179,23 @@ The owner can define one-tap command buttons in `config.json` (global under `"*"
 In a chat, tap **More → Quick commands** to run them in the chat's project folder and view the output.
 **These run with your full user rights, whatever the chat's permission level; only list commands you would run yourself.**
 
+## Push notifications
+
+agents-dialpad can send a Web Push notification when a reply finishes, fails, or has blocked commands.
+
+1. Install the optional push dependency:
+   ```bash
+   uv tool install --upgrade "agents-dialpad[push]"
+   # or with pip: pip install "agents-dialpad[push]"
+   ```
+2. In the web app, open sidebar **More (top right) → Turn on notifications** and allow permissions.
+3. Test with **More → Send a test notification**.
+
+> [!NOTE]
+> On iPhone/iPad, Web Push only works when added to the Home Screen: in Safari, tap Share → Add to Home Screen, then launch the app from your Home Screen.
+>
+> For privacy, push messages are generic by default (`Your reply is ready`). Enable `"push_show_titles": true` in `config.json` if you want the chat title included.
+
 ## Usage limits
 
 Tap **Limits**. Antigravity's quota (five-hour and weekly windows per model family) comes from `agy -p=/usage`
@@ -206,7 +225,7 @@ your first Claude message.
 - Codex is not implemented yet (its `codex exec --json` mode is the likely route).
 - Antigravity does not report tool output (only which tool ran) or cost.
 - Antigravity prompts go on the command line, so messages over ~28k characters are rejected.
-- No in-app approval prompts, file/image upload, or push notifications.
+- No in-app approval prompts or file/image upload.
 - Real agents are only tested on Windows; the computer must stay awake and signed in.
 
 ## Contributing

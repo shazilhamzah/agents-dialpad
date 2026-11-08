@@ -68,12 +68,14 @@ class RunManager:
         get_instructions=lambda: "",
         allow_full=lambda: False,
         keep_awake: KeepAwake | None = None,
+        on_finish=None,
     ):
         self.store = store
         self.projects = projects
         self.get_instructions = get_instructions
         self.allow_full = allow_full
         self.keep_awake = keep_awake or KeepAwake(enabled=False)
+        self.on_finish = on_finish
         self.runs: dict[str, Run] = {}  # latest run per chat
         self.usage_path = store.dir.parent / "usage.json"  # last subscription usage, survives restarts
         self.usage: dict | None = None
@@ -131,3 +133,8 @@ class RunManager:
                 fresh["updated"] = time.time()
                 self.store.save(fresh)
             await run.finish()  # after persisting, so readers never miss the saved message
+            if self.on_finish and not run.stopped:
+                try:
+                    await self.on_finish(chat["id"], run)
+                except Exception as e:
+                    print(f"on_finish failed: {type(e).__name__}: {e}")

@@ -71,7 +71,7 @@ Tips for the person supervising:
 - [x] A2 QR pairing + sidebar menu
 - [x] A3 Chat housekeeping + safe saving
 - [x] A4 Quick commands
-- [ ] B1 Push notifications
+- [x] B1 Push notifications
 - [ ] B2 Change viewer
 - [ ] B3 Desktop sessions
 - [ ] B4 Uploads

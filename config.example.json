@@ -10,5 +10,7 @@
   "quick_commands": {
     "*": [{ "label": "Git status", "run": ["git", "status", "--short"] }]
   },
+  "push_show_titles": false,
+  "push_contact": "mailto:you@example.com",
   "allow_full_access": false
 }

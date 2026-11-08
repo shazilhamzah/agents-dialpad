@@ -464,3 +464,108 @@ def test_quick_commands_need_the_token(env):
         assert client.post("/api/projects/workspace/commands/0").status_code == 401
 
 
+
+
+# --------------------------------------------------------------------------- push notifications (B1)
+def test_push_routes_need_the_token(env):
+    client, _ = env()
+    with client:
+        assert client.get("/api/push/key").status_code == 401
+        assert client.post("/api/push/subscribe", json={"subscription": {}}).status_code == 401
+        assert client.post("/api/push/unsubscribe", json={"endpoint": "https://example.com"}).status_code == 401
+        assert client.post("/api/push/test").status_code == 401
+
+
+def test_subscribe_validates_and_stores(env):
+    client, h = env()
+    with client:
+        # Invalid subscription
+        r = client.post("/api/push/subscribe", headers=h, json={"subscription": {"endpoint": "bad"}})
+        assert r.status_code == 400
+
+        # Valid subscription
+        sub = {
+            "endpoint": "https://push.example.com/phone1",
+            "keys": {"p256dh": "key1", "auth": "auth1"},
+        }
+        r = client.post("/api/push/subscribe", headers=h, json={"subscription": sub, "label": "pixel"})
+        assert r.status_code == 200
+        assert r.json() == {"ok": True}
+
+        # Unsubscribe
+        r = client.post("/api/push/unsubscribe", headers=h, json={"endpoint": "https://push.example.com/phone1"})
+        assert r.status_code == 200
+        assert r.json() == {"ok": True}
+
+
+def test_a_finished_reply_triggers_a_notification(env, monkeypatch):
+    sent_payloads = []
+
+    def fake_send_all(subs, payload, data_dir, contact):
+        sent_payloads.append(payload)
+        return len(subs.all())
+
+    from agents_dialpad import push
+    monkeypatch.setattr(push, "send_all", fake_send_all)
+
+    client, h = env()
+    with client:
+        sub = {
+            "endpoint": "https://push.example.com/phone1",
+            "keys": {"p256dh": "key1", "auth": "auth1"},
+        }
+        client.post("/api/push/subscribe", headers=h, json={"subscription": sub, "label": "phone"})
+
+        cid = new_chat(client, h)
+        turn(client, h, cid, "ping")
+        wait_until_idle(client, h, cid)
+
+        time.sleep(0.1)
+
+        assert len(sent_payloads) == 1
+        assert sent_payloads[0]["tag"] == cid
+        assert sent_payloads[0]["url"] == f"/#/c/{cid}"
+        assert sent_payloads[0]["body"] == "Your reply is ready"
+
+
+def test_stopped_replies_do_not_notify(env, monkeypatch):
+    sent_payloads = []
+
+    def fake_send_all(subs, payload, data_dir, contact):
+        sent_payloads.append(payload)
+        return len(subs.all())
+
+    from agents_dialpad import push
+    monkeypatch.setattr(push, "send_all", fake_send_all)
+
+    client, h = env()
+    with client:
+        sub = {
+            "endpoint": "https://push.example.com/phone1",
+            "keys": {"p256dh": "key1", "auth": "auth1"},
+        }
+        client.post("/api/push/subscribe", headers=h, json={"subscription": sub, "label": "phone"})
+
+        cid = new_chat(client, h)
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "SLOW"})
+        time.sleep(1.5)
+        client.post(f"/api/chats/{cid}/stop", headers=h)
+        wait_until_idle(client, h, cid)
+        time.sleep(0.1)
+
+        assert len(sent_payloads) == 0
+
+
+def test_key_route_returns_501_without_pywebpush(env, monkeypatch):
+    from agents_dialpad import push
+
+    def fake_key(data_dir):
+        raise push.PushUnavailable("pywebpush is not installed")
+
+    monkeypatch.setattr(push, "vapid_public_key", fake_key)
+
+    client, h = env()
+    with client:
+        r = client.get("/api/push/key", headers=h)
+        assert r.status_code == 501
+        assert "pywebpush is not installed" in r.text

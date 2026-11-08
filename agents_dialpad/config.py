@@ -91,6 +91,8 @@ def load() -> tuple[dict, str]:
     # Optional text file added to every conversation (none by default). Example: "instructions/caveman.md".
     cfg.setdefault("instructions_file", None)
     cfg.setdefault("keep_awake", True)
+    cfg.setdefault("push_show_titles", False)
+    cfg.setdefault("push_contact", "mailto:agents-dialpad@example.com")
     from . import quick
     cfg["quick_commands"], cfg["_quick_problems"] = quick.normalize(cfg.get("quick_commands"))
 

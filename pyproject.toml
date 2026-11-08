@@ -24,8 +24,17 @@ agents-dialpad = "agents_dialpad.cli:main"
 Homepage = "https://github.com/shazilhamzah/agents-dialpad"
 Issues = "https://github.com/shazilhamzah/agents-dialpad/issues"
 
+[project.optional-dependencies]
+push = [
+    "pywebpush>=2",
+]
+
 [dependency-groups]
-dev = ["pytest>=8", "httpx>=0.27"]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+    "pywebpush>=2",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["agents_dialpad"]

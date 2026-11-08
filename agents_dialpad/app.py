@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, export, pairing, quick
+from . import config, export, pairing, push, quick
 from .keepawake import KeepAwake
 from .providers import PLANNED, PROVIDERS
 from .runs import RunManager
@@ -44,17 +44,40 @@ class NewMessage(BaseModel):
     text: str = Field(min_length=1, max_length=100_000)
 
 
+class PushSubscribe(BaseModel):
+    subscription: dict
+    label: str = "device"
+
+
+class PushUnsubscribe(BaseModel):
+    endpoint: str
+
+
 def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: KeepAwake | None = None) -> FastAPI:
     if cfg is None or token is None:
         cfg, token = config.load()
     keep_awake = keep_awake or KeepAwake(enabled=bool(cfg.get("keep_awake", True)))
     store = Store(config.DATA / "chats")
+    subs = push.Subscriptions(config.DATA / "push.json")
+
+    async def notify(chat_id: str, run):
+        if not subs.all():
+            return
+        try:
+            chat = store.get(chat_id)
+        except KeyError:
+            return
+        done = next((e for e in reversed(run.events) if e["type"] == "done"), None)
+        payload = push.build_payload(chat, done, bool(cfg.get("push_show_titles")))
+        await asyncio.to_thread(push.send_all, subs, payload, config.DATA, cfg["push_contact"])
+
     runs = RunManager(
         store,
         cfg["projects"],
         lambda: config.read_instructions(cfg),
         lambda: bool(cfg.get("allow_full_access")),
         keep_awake=keep_awake,
+        on_finish=notify,
     )
 
     def modes() -> list[dict]:
@@ -102,6 +125,35 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         base = pairing.tailscale_url(cfg["port"])
         link = pairing.pair_link(base or f"http://127.0.0.1:{cfg['port']}/", token)
         return {"url": link, "remote": base is not None, "qr": pairing.qr_svg_data_uri(link)}
+
+    @api.get("/push/key")
+    def push_key():
+        try:
+            return {"publicKey": push.vapid_public_key(config.DATA)}
+        except push.PushUnavailable as e:
+            raise HTTPException(501, f"Notifications need the push extra: {e}")
+
+    @api.post("/push/subscribe")
+    def push_subscribe(body: PushSubscribe):
+        try:
+            subs.add(body.subscription, body.label)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+
+    @api.post("/push/unsubscribe")
+    def push_unsubscribe(body: PushUnsubscribe):
+        subs.remove(body.endpoint)
+        return {"ok": True}
+
+    @api.post("/push/test")
+    async def push_test():
+        payload = {"title": "agents-dialpad", "body": "Notifications are working", "tag": "test", "url": "/"}
+        try:
+            sent = await asyncio.to_thread(push.send_all, subs, payload, config.DATA, cfg["push_contact"])
+            return {"sent": sent}
+        except push.PushUnavailable as e:
+            raise HTTPException(501, str(e))
 
     def claude_limits() -> dict:
         """Claude Code reports its subscription windows on every turn; we keep the latest."""
