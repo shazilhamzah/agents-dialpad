@@ -15,10 +15,12 @@ import uuid
 
 from .keepawake import KeepAwake
 from .proc import kill_tree
+from .alerts import AlertState, check_alerts
 from .providers import PROVIDERS
 from pathlib import Path
 from . import uploads
 from .store import Store
+from .usage import UsageLog
 
 
 class Run:
@@ -104,6 +106,9 @@ class RunManager:
         on_finish=None,
         on_event=None,
         approval_timeout=lambda: 600.0,
+        limit_alert_percent: int = 20,
+        get_limits=None,
+        notify=None,
     ):
         self.store = store
         self.projects = projects
@@ -113,8 +118,13 @@ class RunManager:
         self.on_finish = on_finish
         self.on_event = on_event
         self.approval_timeout = approval_timeout
+        self.limit_alert_percent = limit_alert_percent
+        self.get_limits = get_limits
+        self.notify = notify
         self.runs: dict[str, Run] = {}  # latest run per chat
         self.usage_path = store.dir.parent / "usage.json"  # last subscription usage, survives restarts
+        self.usage_log = UsageLog(store.dir.parent / "usage-log.jsonl")
+        self.alert_state = AlertState(store.dir.parent / "alerts.json")
         self.usage: dict | None = None
         try:
             self.usage = json.loads(self.usage_path.read_text(encoding="utf-8"))
@@ -199,3 +209,29 @@ class RunManager:
                     await self.on_finish(chat["id"], run)
                 except Exception as e:
                     print(f"on_finish failed: {type(e).__name__}: {e}")
+            # Usage history and low-limit alerts run last: reading Antigravity's limits can take seconds,
+            # and the phone must never wait for that before it sees the reply as done.
+            try:
+                done_ev = next((e for e in run.events if e.get("type") == "done"), {})
+                entry = {
+                    "ts": time.time(),
+                    "provider": chat.get("provider", ""),
+                    "model": chat.get("model", ""),
+                    "chat_id": chat.get("id", ""),
+                    "duration_ms": done_ev.get("duration_ms"),
+                    "input_tokens": done_ev.get("input_tokens"),
+                    "output_tokens": done_ev.get("output_tokens"),
+                    "cost_usd": done_ev.get("cost_usd"),
+                    "is_error": bool(done_ev.get("is_error", False)),
+                }
+                if run.stopped:
+                    entry["stopped"] = True
+                self.usage_log.append(entry)
+            except Exception as e:
+                print(f"usage log failed: {type(e).__name__}: {e}")
+            if self.limit_alert_percent > 0 and self.get_limits:
+                try:
+                    limits_data = await self.get_limits()
+                    check_alerts(self.alert_state, limits_data, self.limit_alert_percent, notify=self.notify)
+                except Exception as e:
+                    print(f"limit alert check failed: {type(e).__name__}: {e}")

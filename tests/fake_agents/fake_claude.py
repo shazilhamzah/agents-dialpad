@@ -97,8 +97,9 @@ reply = "pong " + json.dumps(info, sort_keys=True)
 out(delta(reply[:12]))
 out(delta(reply[12:]))
 out({"type": "assistant", "message": {"id": "m1", "content": [{"type": "text", "text": reply}]}})
-soon = time.time() + 3600
+soon = float(int(time.time() / 86400) * 86400 + 86400)
 out({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "unifiedWindows": {
     "five_hour": {"utilization": 0.25, "resetsAt": soon}, "seven_day": {"utilization": 0.5, "resetsAt": soon + 86400}}}})
 out({"type": "result", "is_error": False, "result": reply, "total_cost_usd": 0.01, "duration_ms": 5,
-     "permission_denials": [{"tool_name": "Bash"}] if "DENY" in prompt else [], "session_id": session})
+     "permission_denials": [{"tool_name": "Bash"}] if "DENY" in prompt else [], "session_id": session,
+     "usage": {"input_tokens": 150, "output_tokens": 30}})

@@ -79,6 +79,6 @@ README: Limits section update, `limit_alert_percent`. CHANGELOG. `config.example
 
 ## Acceptance checklist
 
-- [ ] Log contains no prompt or reply text.
-- [ ] One alert per window, never repeated for the same window.
-- [ ] Works (history only) without the push extra.
+- [x] Log contains no prompt or reply text.
+- [x] One alert per window, never repeated for the same window.
+- [x] Works (history only) without the push extra.

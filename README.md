@@ -200,11 +200,13 @@ agents-dialpad can send a Web Push notification when a reply finishes, fails, or
 >
 > For privacy, push messages are generic by default (`Your reply is ready`). Enable `"push_show_titles": true` in `config.json` if you want the chat title included.
 
-## Usage limits
+## Usage limits and history
 
 Tap **Limits**. Antigravity's quota (five-hour and weekly windows per model family) comes from `agy -p=/usage`
 with no model call, cached for 60 s. Claude Code's windows come from the last reply it sent, so they appear after
 your first Claude message.
+
+The **Last 7 days** section shows daily replies and tokens per agent. When a subscription window drops below `limit_alert_percent` (default 20; set `0` to disable), you get one push notification for that window if notifications are on (see above), and never twice for the same window.
 
 ## Organising chats
 

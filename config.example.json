@@ -14,5 +14,6 @@
   "push_contact": "mailto:you@example.com",
   "approval_timeout_seconds": 600,
   "allow_full_access": false,
-  "codex_models": []
+  "codex_models": [],
+  "limit_alert_percent": 20
 }

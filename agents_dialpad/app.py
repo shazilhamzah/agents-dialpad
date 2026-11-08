@@ -105,6 +105,27 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         }
         await asyncio.to_thread(push.send_all, subs, payload, config.DATA, cfg["push_contact"])
 
+    def notify_limit(title: str, body: str) -> None:
+        """Low-limit alert (C3) as a push notification (B1). Called from the event loop; sends in a worker thread."""
+        if not subs.all():
+            return
+        payload = {"title": title, "body": body, "tag": "limits", "url": "/"}
+        asyncio.get_running_loop().run_in_executor(None, push.send_all, subs, payload, config.DATA, cfg["push_contact"])
+
+    async def get_all_limits(refresh: bool = False) -> list[dict]:
+        out = []
+        for p in PROVIDERS.values():
+            if not p.available():
+                continue
+            if p.name == "claude":
+                data = claude_limits()
+            elif hasattr(p, "limits"):
+                data = await p.limits(refresh)
+            else:
+                continue
+            out.append({"name": p.name, "label": p.label, **data})
+        return out
+
     runs = RunManager(
         store,
         cfg["projects"],
@@ -114,6 +135,9 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         on_finish=notify,
         on_event=notify_approval,
         approval_timeout=lambda: cfg.get("approval_timeout_seconds", 600),
+        limit_alert_percent=int(cfg.get("limit_alert_percent", 20)),
+        get_limits=get_all_limits,
+        notify=notify_limit,
     )
 
     def modes() -> list[dict]:
@@ -243,18 +267,13 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
 
     @api.get("/limits")
     async def limits(refresh: bool = False):
-        out = []
-        for p in PROVIDERS.values():
-            if not p.available():
-                continue
-            if p.name == "claude":
-                data = claude_limits()
-            elif hasattr(p, "limits"):
-                data = await p.limits(refresh)
-            else:
-                continue
-            out.append({"name": p.name, "label": p.label, **data})
-        return {"providers": out}
+        return {"providers": await get_all_limits(refresh)}
+
+    @api.get("/usage")
+    def get_usage(days: int = 7):
+        if not (1 <= days <= 90):
+            raise HTTPException(400, "days must be between 1 and 90")
+        return {"days": runs.usage_log.summary(days=days)}
 
     @api.get("/chats")
     def list_chats(q: str = Query(default="", max_length=100)):

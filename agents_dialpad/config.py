@@ -103,6 +103,8 @@ def load() -> tuple[dict, str]:
     cfg["quick_commands"], cfg["_quick_problems"] = quick.normalize(cfg.get("quick_commands"))
     # Extra models to offer for Codex (empty by default: offers "Default").
     cfg.setdefault("codex_models", [])
+    # Threshold for low-subscription alerts (percentage). 0 disables.
+    cfg.setdefault("limit_alert_percent", 20)
 
     token = os.environ.get("AG_TOKEN") or cfg.get("token")
     if token:

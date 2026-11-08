@@ -621,9 +621,49 @@ async function openModelPicker() {
   };
 }
 
-function limitsHTML(data) {
-  if (!data.providers.length) return '<p class="note">No agents available.</p>';
-  return data.providers.map((p) => {
+function formatTokens(n) {
+  if (!n) return '';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M tokens';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k tokens';
+  return n + ' tokens';
+}
+
+function usageHTML(usageData) {
+  if (!usageData || !usageData.days || !usageData.days.length) return '';
+  const byDate = {};
+  let maxReplies = 1;
+  for (const item of usageData.days) {
+    if (!byDate[item.date]) byDate[item.date] = { date: item.date, providers: {}, totalReplies: 0, totalTokens: 0 };
+    byDate[item.date].providers[item.provider] = item;
+    byDate[item.date].totalReplies += item.replies || 0;
+    byDate[item.date].totalTokens += (item.input_tokens || 0) + (item.output_tokens || 0);
+    if (byDate[item.date].totalReplies > maxReplies) maxReplies = byDate[item.date].totalReplies;
+  }
+  const dates = Object.keys(byDate).sort();
+  if (!dates.length) return '';
+  const rows = dates.map((d) => {
+    const entry = byDate[d];
+    const parts = d.split('-');
+    const dt = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+    const dayStr = dt.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
+    const bars = Object.entries(entry.providers).map(([p, data]) => {
+      if (!data.replies) return '';
+      const pct = Math.max(4, Math.round((data.replies / maxReplies) * 100));
+      return `<div class="usage-bar usage-bar-${esc(p)}" style="width:${pct}%" title="${esc(p)}: ${data.replies}"></div>`;
+    }).join('');
+    const tok = formatTokens(entry.totalTokens);
+    return `<div class="usage-row">
+      <div class="usage-head"><span class="usage-date">${esc(dayStr)}</span>
+      <span class="usage-stats"><span>${entry.totalReplies} ${entry.totalReplies === 1 ? 'reply' : 'replies'}</span>${tok ? ` · ${esc(tok)}` : ''}</span></div>
+      <div class="usage-track">${bars}</div>
+    </div>`;
+  }).join('');
+  return `<section class="lim-sec"><h3>Last 7 days</h3>${rows}</section>`;
+}
+
+function limitsHTML(data, usageData) {
+  if (!data.providers.length && (!usageData || !usageData.days || !usageData.days.length)) return '<p class="note">No agents available.</p>';
+  const lims = data.providers.map((p) => {
     const rows = p.rows.map((r) => {
       const cls = r.remaining < 15 ? 'low' : r.remaining < 40 ? 'mid' : '';
       const name = r.group === p.label ? r.label : `${r.group} · ${r.label}`;   // don't repeat the section heading
@@ -633,6 +673,7 @@ function limitsHTML(data) {
     }).join('');
     return `<section class="lim-sec"><h3>${esc(p.label)}</h3>${rows || `<p class="note">${esc(p.note || 'No data.')}</p>`}</section>`;
   }).join('');
+  return lims + usageHTML(usageData);
 }
 async function openLimits(force) {
   let dlg = $('#ldlg');
@@ -643,7 +684,13 @@ async function openLimits(force) {
     $('[data-close]', dlg).onclick = () => dlg.close();
     $('#lrefresh', dlg).onclick = () => openLimits(true);
   } else $('#lbody', dlg).innerHTML = '<p class="note">Loading…</p>';
-  try { $('#lbody', dlg).innerHTML = limitsHTML(await getJSON('/limits' + (force === true ? '?refresh=true' : ''))); }
+  try {
+    const [limitsData, usageData] = await Promise.all([
+      getJSON('/limits' + (force === true ? '?refresh=true' : '')),
+      getJSON('/usage?days=7').catch(() => ({ days: [] })),
+    ]);
+    $('#lbody', dlg).innerHTML = limitsHTML(limitsData, usageData);
+  }
   catch (e) { dlg.close(); handleErr(e); }
 }
 

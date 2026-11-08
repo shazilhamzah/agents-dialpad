@@ -1294,3 +1294,71 @@ def test_info_reports_who_is_calling(env):
 
         info_dev = client.get("/api/info", headers=h_dev).json()
         assert info_dev["me"] == dev_id
+# --------------------------------------------------------------------------- C3 usage & alerts
+def test_usage_logged_on_finish(env):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h)
+        turn(client, h, cid, "hello")
+        wait_until_idle(client, h, cid)
+        res = client.get("/api/usage?days=7", headers=h)
+        assert res.status_code == 200
+        days = res.json()["days"]
+        claude_days = [d for d in days if d["provider"] == "claude"]
+        assert len(claude_days) == 7
+        today = claude_days[-1]
+        assert today["replies"] >= 1
+        assert today["input_tokens"] == 150
+        assert today["output_tokens"] == 30
+        assert today["errors"] == 0
+
+
+def test_limits_alert_triggered_once(env, tmp_path):
+    client, h = env(limit_alert_percent=60)
+    with client:
+        cid = new_chat(client, h)
+        turn(client, h, cid, "turn 1")
+        wait_until_idle(client, h, cid)
+        alerts_file = tmp_path / "alerts.json"
+        end = time.time() + 10                      # alerts run just after the reply is marked done
+        while not alerts_file.exists() and time.time() < end:
+            time.sleep(0.1)
+        assert alerts_file.exists()
+        alert_data = json.loads(alerts_file.read_text(encoding="utf-8"))
+        alerted_list = alert_data["alerted"]
+        assert len(alerted_list) == 1
+        assert "Weekly" in alerted_list[0] or "seven_day" in alerted_list[0]
+
+        # Second turn on same window should not alert again
+        turn(client, h, cid, "turn 2")
+        wait_until_idle(client, h, cid)
+        alert_data2 = json.loads(alerts_file.read_text(encoding="utf-8"))
+        assert len(alert_data2["alerted"]) == 1
+
+
+
+def test_low_limit_alert_sends_exactly_one_push(env, monkeypatch):
+    """C3 + B1 together: a window below the threshold sends one push, and never twice for the same window."""
+    sent = []
+
+    def fake_send_all(subs, payload, data_dir, contact):
+        sent.append(payload)
+        return len(subs.all())
+
+    from agents_dialpad import push
+    monkeypatch.setattr(push, "send_all", fake_send_all)
+    client, h = env(limit_alert_percent=60)        # the fake claude reports 50 % used of the weekly window
+    with client:
+        sub = {"endpoint": "https://push.example.com/phone1", "keys": {"p256dh": "key1", "auth": "auth1"}}
+        client.post("/api/push/subscribe", headers=h, json={"subscription": sub, "label": "phone"})
+        cid = new_chat(client, h)
+        for text in ("turn 1", "turn 2"):
+            turn(client, h, cid, text)
+            wait_until_idle(client, h, cid)
+        end = time.time() + 10
+        while not [p for p in sent if p.get("tag") == "limits"] and time.time() < end:
+            time.sleep(0.1)
+        time.sleep(0.5)                            # give a wrongly repeated alert time to show up
+        alerts = [p for p in sent if p.get("tag") == "limits"]
+        assert len(alerts) == 1
+        assert "% left" in alerts[0]["body"] and "pong" not in alerts[0]["body"]   # no conversation content

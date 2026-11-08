@@ -65,6 +65,7 @@ class _Parser:
             if ok and not r.get("response") and not self.streamed_text and self.notes:
                 out.append({"type": "error", "message": " ".join(self.notes)[:800]})
             secs = r.get("duration_seconds")
+            usage = r.get("usage") or {}
             out.append(
                 {
                     "type": "done",
@@ -73,6 +74,8 @@ class _Parser:
                     "cost_usd": None,
                     "duration_ms": int(secs * 1000) if secs else None,
                     "denials": denials,
+                    "input_tokens": usage.get("input_tokens"),
+                    "output_tokens": usage.get("output_tokens"),
                 }
             )
         return out

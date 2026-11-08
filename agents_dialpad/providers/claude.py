@@ -102,6 +102,10 @@ class _Parser:
                 )
         elif t == "result":
             denials = [d.get("tool_name") if isinstance(d, dict) else str(d) for d in o.get("permission_denials") or []]
+            usage = o.get("usage") or {}
+            in_tok = usage.get("input_tokens")
+            if in_tok is not None:
+                in_tok += (usage.get("cache_read_input_tokens") or 0) + (usage.get("cache_creation_input_tokens") or 0)
             out.append(
                 {
                     "type": "done",
@@ -110,6 +114,8 @@ class _Parser:
                     "cost_usd": o.get("total_cost_usd"),
                     "duration_ms": o.get("duration_ms"),
                     "denials": denials,
+                    "input_tokens": in_tok,
+                    "output_tokens": usage.get("output_tokens"),
                 }
             )
         return out

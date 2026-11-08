@@ -79,11 +79,20 @@ class _Parser:
             elif itype == "error":
                 self.notes.append(item.get("message") or "")
         elif t == "turn.completed":
-            usage = o.get("usage")
+            usage = o.get("usage") or {}
             if usage:
                 out.append({"type": "usage", "info": usage})
             self.saw_done = True
-            out.append({"type": "done", "is_error": False, "result": None, "cost_usd": None, "duration_ms": None, "denials": []})
+            out.append({
+                "type": "done",
+                "is_error": False,
+                "result": None,
+                "cost_usd": None,
+                "duration_ms": None,
+                "denials": [],
+                "input_tokens": usage.get("input_tokens"),
+                "output_tokens": usage.get("output_tokens"),
+            })
         elif t == "error":
             self.saw_error = True
             out.append({"type": "error", "message": o.get("message") or ""})
@@ -92,7 +101,16 @@ class _Parser:
             if not self.saw_error and err_msg:
                 out.append({"type": "error", "message": err_msg})
             self.saw_done = True
-            out.append({"type": "done", "is_error": True, "result": err_msg, "cost_usd": None, "duration_ms": None, "denials": []})
+            out.append({
+                "type": "done",
+                "is_error": True,
+                "result": err_msg,
+                "cost_usd": None,
+                "duration_ms": None,
+                "denials": [],
+                "input_tokens": None,
+                "output_tokens": None,
+            })
 
         return out
 

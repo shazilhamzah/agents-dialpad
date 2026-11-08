@@ -31,6 +31,9 @@
   --del-bg: #fdecec;
   --add-mark: var(--ok);
   --del-mark: var(--danger);
+  --bar-1: #1d7a43;
+  --bar-2: #1a56e8;
+  --bar-3: #8f5200;
   --user-bg: #1a56e8;
   --user-ink: #ffffff;
   --scrim: rgba(10, 10, 14, .42);
@@ -70,6 +73,9 @@
     --del-bg: #3a1517;
     --add-mark: var(--ok);
     --del-mark: var(--danger);
+    --bar-1: #5fd08a;
+    --bar-2: #7aa7ff;
+    --bar-3: #f0b24a;
     --user-bg: #2c4fb3;
     --user-ink: #ffffff;
     --scrim: rgba(0, 0, 0, .6);
@@ -347,6 +353,15 @@ dialog.sheet::backdrop { background: var(--scrim); animation: fade-in 200ms var(
 .track i { display: block; height: 100%; border-radius: inherit; background: var(--ok); transition: width var(--t-sheet) var(--ease); }
 .track i.mid { background: #d28a00; } .track i.low { background: var(--danger); }
 .lim small { color: var(--text-3); font-size: .8125rem; font-variant-numeric: tabular-nums; }
+.usage-row { margin-bottom: 10px; }
+.usage-head { display: flex; justify-content: space-between; align-items: baseline; font-size: .8125rem; color: var(--text-2); margin-bottom: 3px; }
+.usage-date { font-weight: 600; color: var(--text); }
+.usage-stats { font-variant-numeric: tabular-nums; color: var(--text-3); }
+.usage-track { height: 8px; border-radius: 999px; background: var(--surface-2); display: flex; overflow: hidden; gap: 2px; }
+.usage-bar { height: 100%; border-radius: inherit; }
+.usage-bar-claude { background: var(--bar-1); }
+.usage-bar-antigravity { background: var(--bar-2); }
+.usage-bar-codex { background: var(--bar-3); }
 .note { color: var(--text-3); font-size: .9375rem; margin: 6px 0; }
 
 /* overflow menu */
