@@ -158,11 +158,11 @@ timeout, and that "Full access" is still available but rarely needed. CHANGELOG.
 
 ## Acceptance checklist
 
-- [ ] `C1-findings.md` exists with real recorded messages before any product code.
-- [ ] Claude "ask" mode works end to end on a real phone.
-- [ ] Unanswered requests are denied after the timeout; stopping a reply never leaves a process waiting forever.
-- [ ] Other modes behave exactly as before (test).
-- [ ] Approval cards escape all text and never show the token.
+- [x] `C1-findings.md` exists with real recorded messages before any product code.
+- [x] Claude "ask" mode works end to end on a real phone.
+- [x] Unanswered requests are denied after the timeout; stopping a reply never leaves a process waiting forever.
+- [x] Other modes behave exactly as before (test).
+- [x] Approval cards escape all text and never show the token.
 
 ## Pitfalls
 
