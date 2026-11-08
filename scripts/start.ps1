@@ -20,5 +20,5 @@ $log = Join-Path $root "data\gateway.log"
 if ((Test-Path $log) -and ((Get-Item $log).Length -gt 5MB)) { Move-Item $log "$log.old" -Force }
 
 "[$(Get-Date -Format s)] starting agents-dialpad" | Out-File $log -Append -Encoding ascii
-cmd /c "`"$py`" -m gateway >> `"$log`" 2>&1"
+cmd /c "`"$py`" -m agents_dialpad serve --quiet >> `"$log`" 2>&1"
 exit $LASTEXITCODE

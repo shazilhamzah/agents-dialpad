@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from gateway import config
-from gateway.store import Store
+from agents_dialpad import config
+from agents_dialpad.store import Store
 
 
 @pytest.fixture
@@ -57,11 +57,12 @@ def test_config_file_with_bom_is_accepted(data_dir):
     assert "projects" in cfg
 
 
-def test_relative_project_paths_resolve_against_the_project_root(data_dir):
+def test_relative_project_paths_resolve_against_the_data_folder(data_dir):
     config.load()
-    (data_dir / "config.json").write_text(json.dumps({"projects": {"rel": "data/workspace"}}))
+    (data_dir / "config.json").write_text(json.dumps({"projects": {"rel": "workspace", "abs": str(data_dir / "elsewhere")}}))
     cfg, _ = config.load()
-    assert cfg["projects"]["rel"] == str(config.ROOT / "data" / "workspace")
+    assert cfg["projects"]["rel"] == str(data_dir / "workspace")
+    assert cfg["projects"]["abs"] == str(data_dir / "elsewhere")      # absolute paths are kept as written
 
 
 def test_instructions_are_read_fresh_and_can_be_disabled(tmp_path):

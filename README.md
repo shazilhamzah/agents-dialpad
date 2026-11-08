@@ -18,86 +18,103 @@ Phone (installable PWA) ──private network (e.g. Tailscale)──► agents-d
 - It never sees or stores your provider logins: it only launches the **official CLIs**, which authenticate
   exactly as they do in your terminal.
 
-> **Status: early prototype.** Developed and tested on Windows 11 only. The core is plain Python and may run on
-> macOS or Linux, but that is untested; the auto-start scripts are Windows-specific. Issues and PRs welcome.
+> **Status: early prototype.** Real agents are tested on Windows 11. The test suite (with fake agents) runs in CI on
+> Windows, macOS and Linux, and the macOS/Linux auto-start files are generated and unit-tested but have not been tried
+> on real machines yet. Issues and PRs welcome.
 
 > **Read [SECURITY.md](SECURITY.md) before exposing this to any network.** It starts agents that can edit files
 > and (in "Full access") run commands on your machine.
 
 agents-dialpad is an independent project and is not affiliated with or endorsed by Anthropic, Google, Tailscale, or
-Dialpad, Inc.
-"Claude Code", "Antigravity" and other product names belong to their owners.
+Dialpad, Inc. "Claude Code", "Antigravity" and other product names belong to their owners.
 
 ## Requirements
 
-- Python 3.11+ and [uv](https://docs.astral.sh/uv/)
+- Python 3.11+ and [uv](https://docs.astral.sh/uv/) (or pipx)
 - At least one agent CLI, installed and **already logged in** on this machine:
   [Claude Code](https://claude.com/claude-code) (`claude`) and/or Antigravity (`agy`)
 - To use it from a phone: a private network path to your computer. [Tailscale](https://tailscale.com) is the
-  recommended one (below).
+  recommended one; see [docs/remote-access.md](docs/remote-access.md) for the options.
 
-## Quick start
+## Install and run
 
-```powershell
-git clone https://github.com/shazilhamzah/agents-dialpad.git
-cd agents-dialpad
-uv sync
-uv run python -m gateway
+```bash
+uv tool install git+https://github.com/shazilhamzah/agents-dialpad   # installs the `agents-dialpad` command
+agents-dialpad init       # creates the data folder; asks which project folders the phone may use
+agents-dialpad doctor     # checks your agent CLIs, config and Tailscale, and tells you what to fix
+agents-dialpad serve      # starts it and prints a link
 ```
 
-It prints a link like `http://127.0.0.1:8787/#token=...`. Open it once per device; the token is saved in that
-browser and removed from the address bar. On first run it creates `data/` (config, token, chats), which is
-git-ignored. Copy `config.example.json` to `data/config.json` to see the available settings.
+Open the printed link (`http://127.0.0.1:8787/#token=...`) once per device. The token is saved in that browser and
+removed from the address bar. Once the package is on PyPI the first line becomes `uv tool install agents-dialpad`.
 
-## Use it from your phone (Tailscale)
+Other ways to run it:
 
-1. Install Tailscale on the computer and the phone, signed in to the same tailnet, with HTTPS enabled in the
-   Tailscale admin console.
+```bash
+uvx --from git+https://github.com/shazilhamzah/agents-dialpad agents-dialpad serve   # try it without installing
+git clone https://github.com/shazilhamzah/agents-dialpad.git && cd agents-dialpad && uv sync && uv run agents-dialpad serve
+```
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `agents-dialpad serve [--port N]` | Start the server (also what plain `agents-dialpad` does). Exits quietly if it is already running. |
+| `agents-dialpad init [--project NAME=PATH]` | Create the data folder and choose project folders. |
+| `agents-dialpad project add\|list\|remove` | Manage the folders the phone can pick. |
+| `agents-dialpad token [--rotate]` | Show the access token (and the link for a device), or replace it. |
+| `agents-dialpad doctor` | Check Python, config, agent CLIs, the port and Tailscale. Exit code 1 if something blocks you. |
+| `agents-dialpad autostart install\|uninstall\|status` | Start automatically at login (below). `--dry-run` shows what would change. |
+
+Global option: `--data-dir PATH` (or the `AG_DATA` environment variable) chooses where config, token and chats live.
+The default is a per-user folder (Windows `%LOCALAPPDATA%\agents-dialpad`, macOS `~/Library/Application Support/agents-dialpad`,
+Linux `~/.local/share/agents-dialpad`), or `./data` when you run from a git checkout.
+
+## Use it from your phone
+
+Short version with Tailscale (full guide, with alternatives: [docs/remote-access.md](docs/remote-access.md)):
+
+1. Install Tailscale on the computer and the phone, signed in to the same tailnet, with HTTPS enabled in the Tailscale admin console.
 2. On the computer, publish agents-dialpad on its **own HTTPS port** (this does not touch anything else you publish):
-   ```powershell
+   ```bash
    tailscale serve status                      # check what is already published first
    tailscale serve --bg --https=8443 8787
    ```
-   Plain `tailscale serve --bg 8787` takes over port 443 and would replace anything already there. Undo with
-   `tailscale serve --https=8443 off`.
 3. On the phone, open `https://<your-machine>.<your-tailnet>.ts.net:8443/#token=<your token>`, then install it:
    iOS Safari → Share → Add to Home Screen; Android Chrome → menu → Install app.
 
 Do **not** use Tailscale Funnel or port-forward agents-dialpad to the public internet.
 
-## Start automatically (Windows)
+## Start automatically
 
-A per-user scheduled task starts agents-dialpad when you **sign in** and when you **unlock** the computer. It is safe to
-trigger repeatedly: if agents-dialpad is already up, the script exits without doing anything. The task also acts as a **watchdog**: every
-5 minutes it checks again, so if agents-dialpad ever stops it is back within 5 minutes (while it is running, the tick is
-ignored and costs nothing). It runs through `scripts/start-hidden.vbs` so no console window ever appears. Output goes to
-`data/gateway.log`.
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\install-autostart.ps1     # install / re-install
-powershell -File scripts\stop.ps1                                          # stop it completely
-powershell -File scripts\stop.ps1 -Restart                                 # restart (after editing config.json)
-powershell -ExecutionPolicy Bypass -File scripts\uninstall-autostart.ps1   # remove
+```bash
+agents-dialpad autostart install      # then: status, uninstall
 ```
 
-(`Stop-ScheduledTask` alone is not enough: it leaves the gateway process running.) Sleep pauses agents-dialpad and it
-resumes on wake, but your phone cannot reach it while the computer sleeps. To use it with the lid closed, set
-Windows power settings to never sleep when plugged in.
+Install agents-dialpad permanently first (`uv tool install` or `pipx install`), not through `uvx`: the service points at the
+Python that ran the command, and `uvx` environments are temporary.
 
-**Desktop shortcut.** `powershell -ExecutionPolicy Bypass -File scripts\create-shortcut.ps1` puts a *agents-dialpad*
-icon on your Desktop. Double-clicking it starts the gateway if it is not running (and waits until it answers),
-checks that Tailscale is connected and phone access is published, then opens agents-dialpad in your browser. It is safe
-to click when everything is already running. The token is read from `data\token.txt` when you click, so it is not
-stored in the shortcut.
+| OS | What is registered | Restarts if it stops? |
+|---|---|---|
+| Windows | A per-user scheduled task: at sign-in (+20 s), at unlock, and a 5-minute watchdog tick. Runs windowless (`pythonw`). | Yes, within 5 minutes |
+| macOS | A launchd agent (`~/Library/LaunchAgents/io.github.shazilhamzah.agents-dialpad.plist`) with `KeepAlive`. | Yes, immediately |
+| Linux | A systemd user service (`~/.config/systemd/user/agents-dialpad.service`) with `Restart=always`. Run `loginctl enable-linger $USER` to keep it running when you are logged out. | Yes, after 5 s |
+
+Background output goes to `gateway.log` in the data folder, and the access token is never written to it. Sleep pauses
+the server and it resumes on wake, but your phone cannot reach it while the computer sleeps.
+
+**Extra Windows helpers (in a git checkout, `scripts/`):**
+`launch.ps1` (start everything, check Tailscale, open the app), `create-shortcut.ps1` (puts an *agents-dialpad* icon on your
+Desktop that runs it), `stop.ps1 [-Restart]` (stop completely; `Stop-ScheduledTask` alone leaves the server running).
 
 ## Configuration
 
-Everything lives in `data/config.json` (see [`config.example.json`](config.example.json)). Restart after editing.
+Everything lives in `config.json` in the data folder (see [`config.example.json`](config.example.json)). Restart after editing.
 
 | Key | Meaning |
 |---|---|
 | `host`, `port` | Listen address. Keep `127.0.0.1` and put a private-network proxy in front. |
-| `projects` | `name → folder`. The phone can only pick from this list, it can never type a path. Relative paths are relative to the agents-dialpad folder. |
+| `projects` | `name → folder`. The phone can only pick from this list, it can never type a path. Relative paths are relative to the data folder. Manage with `agents-dialpad project`. |
 | `token` | Optional fixed access token (16+ characters). |
 | `instructions_file` | Optional text file added to every conversation. Default `null` (none). Re-read every turn. See below. |
 | `allow_full_access` | `true` adds the **Full access** permission level (see below). Default off. |
@@ -105,19 +122,25 @@ Everything lives in `data/config.json` (see [`config.example.json`](config.examp
 ### Access token
 
 Static: generated once and reused on every run. Order of precedence: env var `AG_TOKEN`, then `"token"` in
-`config.json`, then `data/token.txt` (created on first run; delete it to rotate).
+`config.json`, then `token.txt` in the data folder (created on first run). `agents-dialpad token --rotate` replaces it.
 
 ### Models
 
-Pick a model when starting a chat, or tap the model chip in a chat's header to switch; it applies from your next
-message. Claude Code's list is in `gateway/providers/claude.py`; Antigravity's comes live from `agy models`.
+Pick a model when starting a chat, or tap the model chip above the message box to switch; it applies from your next
+message. Claude Code's list is in `agents_dialpad/providers/claude.py`; Antigravity's comes live from `agy models`.
 
 ### Always-on instructions
 
-Off by default. Point `"instructions_file"` at any text file and its contents are added to every conversation
-(Claude Code via `--append-system-prompt`; Antigravity has no such flag, so it is prefixed to the first message with a
-short reminder after). `instructions/caveman.md` ships as an example: a terse-reply style condensed from the
-open-source "caveman" Claude skill. Enable it with `"instructions_file": "instructions/caveman.md"`.
+Off by default. Point `"instructions_file"` at any text file (absolute, relative to the data folder, or one of the examples
+shipped in the package) and its contents are added to every conversation (Claude Code via `--append-system-prompt`;
+Antigravity has no such flag, so it is prefixed to the first message with a short reminder after).
+`instructions/caveman.md` ships as an example: a terse-reply style condensed from the open-source "caveman" Claude skill.
+Enable it with `"instructions_file": "instructions/caveman.md"`.
+
+### Advanced: wrapping an agent CLI
+
+`AG_CLAUDE` / `AG_AGY` choose the executable; `AG_CLAUDE_ARGS` / `AG_AGY_ARGS` (a JSON list) add arguments right after it,
+for example to run an agent through a wrapper. The test suite uses this to drive fake agents.
 
 ## Permissions
 
@@ -142,14 +165,16 @@ Tap **Limits**. Antigravity's quota (five-hour and weekly windows per model fami
 with no model call, cached for 60 s. Claude Code's windows come from the last reply it sent, so they appear after
 your first Claude message.
 
-## Layout
+## Project layout
 
-- `gateway/app.py`: HTTP API (`/api/...`, bearer token) and static files
-- `gateway/runs.py`: background turns; they survive phone lock/disconnect and can be replayed
-- `gateway/providers/`: one adapter per CLI (`claude.py`, `antigravity.py`); copy one to add another agent
-- `static/`: the mobile PWA (plain HTML/CSS/JS); `markdown.js` is the dependency-free Markdown renderer
-- `scripts/`: Windows auto-start helpers
-- `tests/`: parser, config and storage tests (`uv run pytest`), Markdown tests (`node --test tests/js/markdown.test.js`)
+- `agents_dialpad/app.py`: HTTP API (`/api/...`, bearer token) and static files; `create_app()` builds an independent app
+- `agents_dialpad/runs.py`: background turns; they survive phone lock/disconnect and can be replayed
+- `agents_dialpad/providers/`: one adapter per CLI (`claude.py`, `antigravity.py`); copy one to add another agent
+- `agents_dialpad/cli.py`, `doctor.py`, `autostart.py`: the command line
+- `agents_dialpad/static/`: the mobile PWA (plain HTML/CSS/JS); `markdown.js` is the dependency-free Markdown renderer
+- `scripts/`: extra Windows helpers for a git checkout
+- `tests/`: unit tests, end-to-end tests with fake agents (`uv run pytest`), Markdown tests (`node --test tests/js/markdown.test.js`)
+- `tools/`: icon generator and the wheel smoke test used by CI
 
 ## Known gaps
 
@@ -157,7 +182,7 @@ your first Claude message.
 - Antigravity does not report tool output (only which tool ran) or cost.
 - Antigravity prompts go on the command line, so messages over ~28k characters are rejected.
 - No in-app approval prompts, file/image upload, or push notifications.
-- Windows-only tested; the computer must stay awake and signed in.
+- Real agents are only tested on Windows; the computer must stay awake and signed in.
 
 ## Contributing
 

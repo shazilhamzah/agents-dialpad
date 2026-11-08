@@ -3,6 +3,27 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/) and the
 project uses [semantic versioning](https://semver.org/) (0.x means the interface may still change).
 
+## [Unreleased]
+
+### Added
+- **Installable package.** `uv tool install git+https://github.com/shazilhamzah/agents-dialpad` (or pipx) gives an
+  `agents-dialpad` command; the UI ships inside the wheel. PyPI publishing is wired up and opt-in.
+- **Command line:** `serve`, `init`, `project add|list|remove`, `token [--rotate]`, `doctor`, `autostart install|uninstall|status`.
+- **Cross-platform auto-start:** Windows (scheduled task + watchdog, now windowless via `pythonw`), macOS (launchd,
+  `KeepAlive`) and Linux (systemd user service, `Restart=always`). macOS/Linux files are unit-tested but not yet tried
+  on real machines.
+- **Per-user data folder** on every OS (`--data-dir` / `AG_DATA` to override; `./data` in a git checkout).
+- **End-to-end tests with fake `claude` and `agy` CLIs** (send, stream, resume, stop, replay, restart, permissions) and a
+  wheel smoke test; CI now also runs on macOS and on the oldest supported Python (3.11).
+- `docs/remote-access.md`: Tailscale, Cloudflare Tunnel with Access, SSH tunnel, and what not to do.
+- `AG_CLAUDE_ARGS` / `AG_AGY_ARGS` to put arguments after an agent executable (wrappers, tests).
+
+### Changed
+- The Python package is now `agents_dialpad` (was `gateway`); run it with `agents-dialpad` or `python -m agents_dialpad`.
+- Relative project paths in `config.json` are now relative to the data folder.
+- `serve` no longer prints the access token unless it is attached to a terminal (the token no longer lands in log files).
+- `app.create_app()` builds an independent app, which is what lets the tests run many isolated apps.
+
 ## [0.1.0] - 2026-11-08
 
 First public release. **Early prototype, developed and tested on Windows 11 only.**

@@ -12,10 +12,11 @@ access and deploy it accordingly.
 - **Prompt injection is real.** An agent that reads an untrusted file, web page or repo can be told to do
   things. In "Full access" it can act on them without asking. Use "Read-only" or "Can edit files" for untrusted
   projects.
-- **Project folders are an allowlist.** The phone can only choose folders listed in `data/config.json`; it
+- **Project folders are an allowlist.** The phone can only choose folders listed in `config.json` (in the data folder); it
   cannot supply a path. The agent itself is not sandboxed to that folder by agents-dialpad.
 - **Provider logins are never read.** agents-dialpad only launches the official CLIs. It stores chat transcripts and
-  your token under `data/` (git-ignored), unencrypted, so protect that folder like any other secret.
+  your token in the data folder, unencrypted, so protect that folder like any other secret. Background services run with
+  `--quiet`, so the token is never written to their logs; `agents-dialpad token` prints it on demand.
 - The token travels in the URL **fragment** (`#token=`), which browsers do not send to servers, and is removed
   from the address bar after first use. API calls use an `Authorization` header.
 

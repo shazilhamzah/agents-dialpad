@@ -20,6 +20,8 @@ import os
 import shutil
 from typing import AsyncIterator
 
+from ._cmd import extra_args
+
 # UI mode -> `claude --permission-mode`
 MODES = {"readonly": "plan", "edit": "acceptEdits", "full": "bypassPermissions"}
 MAX_RESULT_CHARS = 4000
@@ -125,7 +127,7 @@ class ClaudeProvider:
         if not exe:
             raise RuntimeError("`claude` was not found on PATH (set AG_CLAUDE to its full path).")
         args = [
-            exe, "-p",
+            exe, *extra_args("AG_CLAUDE_ARGS"), "-p",
             "--output-format", "stream-json",
             "--verbose",
             "--include-partial-messages",

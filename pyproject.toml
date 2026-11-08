@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "agents-dialpad"
 version = "0.1.0"
@@ -5,22 +9,26 @@ description = "Chat with the AI coding CLIs on your computer (Claude Code, Antig
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Shazil Hamzah" }]
+keywords = ["claude-code", "antigravity", "ai-agents", "pwa", "self-hosted", "tailscale"]
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
 ]
 
+[project.scripts]
+agents-dialpad = "agents_dialpad.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/shazilhamzah/agents-dialpad"
 Issues = "https://github.com/shazilhamzah/agents-dialpad/issues"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["agents_dialpad"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-
-[tool.setuptools]
-packages = ["gateway", "gateway.providers"]
