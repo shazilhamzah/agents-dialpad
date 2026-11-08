@@ -123,6 +123,7 @@ Everything lives in `config.json` in the data folder (see [`config.example.json`
 | `instructions_file` | Optional text file added to every conversation. Default `null` (none). Re-read every turn. See below. |
 | `keep_awake` | Prevent idle sleep while an agent reply is running. Default `true`. |
 | `allow_full_access` | `true` adds the **Full access** permission level (see below). Default off. |
+| `approval_timeout_seconds` | Seconds to wait for command approvals in "Ask me before commands" mode before auto-denying (default 600). Overridden by `AG_APPROVAL_TIMEOUT`. |
 | `push_show_titles` | Include chat title in push notifications (`false` by default for privacy). |
 | `push_contact` | VAPID `sub` claim (`mailto:` address). Default: `mailto:agents-dialpad@example.com`. |
 
@@ -155,12 +156,12 @@ for example to run an agent through a wrapper. The test suite uses this to drive
 |---|---|---|---|
 | Read-only | `--permission-mode plan` | `--mode plan` | read and search files |
 | Can edit files | `--permission-mode acceptEdits` | `--mode accept-edits` | edit files; commands needing approval are blocked and listed under the reply |
+| Ask me before commands | `--permission-mode default` + host prompts | *(coming in Part 3)* | edit files, prompts for confirmation before running commands |
 | Full access *(opt-in)* | `--permission-mode bypassPermissions` | `--dangerously-skip-permissions` | run any command without asking |
 
-Both CLIs run headless, so nobody can click "approve": in the first two levels any shell command that needs
-approval is refused and shown as "blocked (needs approval)". Antigravity's `--mode auto` does not help, and its
-`permissions.allow` rules matched unreliably in testing, so there is no dependable allowlist yet. Real
-approve/deny buttons are on the roadmap.
+When using **Ask me before commands** (Claude Code), shell commands and tools that require confirmation display an interactive card in the chat with **Allow** and **Deny** buttons. If push notifications are enabled, a notification is sent to your device with the command details. Unanswered requests time out and auto-deny after 10 minutes (configured via `approval_timeout_seconds` in `config.json` or the `AG_APPROVAL_TIMEOUT` environment variable).
+
+In **Read-only** and **Can edit files**, any command that requires interactive approval is refused and shown as "blocked (needs approval)".
 
 **Full access** is off by default. Enable it with `"allow_full_access": true`, then choose it per chat. Anyone with
 your token can then run commands on your machine, and a prompt-injected file in a repo could too. Only use it on

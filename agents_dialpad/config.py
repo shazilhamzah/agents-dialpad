@@ -91,6 +91,12 @@ def load() -> tuple[dict, str]:
     # Optional text file added to every conversation (none by default). Example: "instructions/caveman.md".
     cfg.setdefault("instructions_file", None)
     cfg.setdefault("keep_awake", True)
+    cfg.setdefault("approval_timeout_seconds", 600)
+    if "AG_APPROVAL_TIMEOUT" in os.environ:
+        try:
+            cfg["approval_timeout_seconds"] = float(os.environ["AG_APPROVAL_TIMEOUT"])
+        except ValueError:
+            pass
     cfg.setdefault("push_show_titles", False)
     cfg.setdefault("push_contact", "mailto:agents-dialpad@example.com")
     from . import quick

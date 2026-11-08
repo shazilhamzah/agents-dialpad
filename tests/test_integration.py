@@ -93,7 +93,9 @@ def test_info_lists_agents_models_projects_and_modes(env):
         assert agents["claude"]["available"] and agents["antigravity"]["available"] and not agents["codex"]["available"]
         assert [m["id"] for m in agents["antigravity"]["models"]][:2] == ["", "gemini-test-low"]
         assert info["projects"] == ["workspace"]
-        assert [m["id"] for m in info["modes"]] == ["readonly", "edit"]       # no full access unless enabled
+        assert [m["id"] for m in info["modes"]] == ["readonly", "edit", "ask"]       # no full access unless enabled
+        assert [m["id"] for m in agents["claude"]["modes"]] == ["readonly", "edit", "ask"]
+        assert [m["id"] for m in agents["antigravity"]["modes"]] == ["readonly", "edit"]
 
 
 # --------------------------------------------------------------------------- claude
@@ -238,7 +240,179 @@ def test_bad_input_is_rejected(env):
         assert post(mode="nope") == 400
         assert client.post("/api/chats", headers=h, json={"provider": "claude", "project": "../etc"}).status_code == 400
         assert client.post("/api/chats", headers=h, json={"provider": "codex", "project": "workspace"}).status_code == 400
+        assert client.post("/api/chats", headers=h, json={"provider": "antigravity", "project": "workspace", "mode": "ask"}).status_code == 400
         assert client.get("/api/chats/..%5C..%5Cconfig", headers=h).status_code == 404
+
+
+# --------------------------------------------------------------------------- approvals
+def test_ask_mode_waits_and_runs_after_allow(env, calls):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h, mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+        end = time.time() + 5
+        while time.time() < end and not calls():
+            time.sleep(0.05)
+        end = time.time() + 5
+        approved = False
+        while time.time() < end:
+            r = client.post(f"/api/chats/{cid}/approvals/req-1", headers=h, json={"allow": True})
+            if r.status_code == 200:
+                assert r.json() == {"ok": True}
+                approved = True
+                break
+            time.sleep(0.05)
+        assert approved, "Approval request req-1 was not received in time"
+        wait_until_idle(client, h, cid)
+        with client.stream("GET", f"/api/chats/{cid}/stream?start=0", headers=h) as r:
+            events = [json.loads(line) for line in r.iter_lines() if line and '"ping"' not in line]
+        assert "pong approved" in text_of(events)
+        assert any(e.get("type") == "approval" and (e.get("id") == "req-1" or e.get("req_id") == "req-1") for e in events)
+        assert any(e.get("type") == "approval_result" and e.get("allow") is True and e.get("by") == "user" for e in events)
+
+
+def test_ask_mode_continues_after_deny(env, calls):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h, mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+        end = time.time() + 5
+        while time.time() < end and not calls():
+            time.sleep(0.05)
+        end = time.time() + 5
+        denied = False
+        while time.time() < end:
+            r = client.post(f"/api/chats/{cid}/approvals/req-1", headers=h, json={"allow": False})
+            if r.status_code == 200:
+                assert r.json() == {"ok": True}
+                denied = True
+                break
+            time.sleep(0.05)
+        assert denied, "Approval request req-1 was not received in time"
+        wait_until_idle(client, h, cid)
+        with client.stream("GET", f"/api/chats/{cid}/stream?start=0", headers=h) as r:
+            events = [json.loads(line) for line in r.iter_lines() if line and '"ping"' not in line]
+        assert "pong denied" in text_of(events)
+        assert any(e.get("type") == "approval" and (e.get("id") == "req-1" or e.get("req_id") == "req-1") for e in events)
+        assert any(e.get("type") == "approval_result" and e.get("allow") is False and e.get("by") == "user" for e in events)
+
+
+def test_unanswered_approval_times_out_as_deny(env, monkeypatch):
+    monkeypatch.setenv("AG_APPROVAL_TIMEOUT", "1")
+    client, h = env()
+    with client:
+        cid = new_chat(client, h, mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+        wait_until_idle(client, h, cid, timeout=10)
+        with client.stream("GET", f"/api/chats/{cid}/stream?start=0", headers=h) as r:
+            events = [json.loads(line) for line in r.iter_lines() if line and '"ping"' not in line]
+        assert "pong denied" in text_of(events)
+        assert any(e.get("type") == "approval_result" and e.get("allow") is False and e.get("by") == "timeout" for e in events)
+
+
+def test_stopping_while_waiting_ends_the_reply(env, calls):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h, mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+        end = time.time() + 5
+        while time.time() < end and not calls():
+            time.sleep(0.05)
+        time.sleep(0.3)
+        client.post(f"/api/chats/{cid}/stop", headers=h)
+        wait_until_idle(client, h, cid)
+        with client.stream("GET", f"/api/chats/{cid}/stream?start=0", headers=h) as r:
+            events = [json.loads(line) for line in r.iter_lines() if line and '"ping"' not in line]
+        assert events[-1] == {"type": "done", "is_error": False, "stopped": True}
+        assert any(e.get("type") == "approval_result" and e.get("by") == "stopped" for e in events)
+
+
+def test_approving_twice_is_409_and_unknown_is_404(env, calls):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h, mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+        end = time.time() + 5
+        while time.time() < end and not calls():
+            time.sleep(0.05)
+        # Unknown req id returns 404
+        assert client.post(f"/api/chats/{cid}/approvals/req-unknown", headers=h, json={"allow": True}).status_code == 404
+        # Wait until req-1 is pending
+        end = time.time() + 5
+        approved = False
+        while time.time() < end:
+            r = client.post(f"/api/chats/{cid}/approvals/req-1", headers=h, json={"allow": True})
+            if r.status_code == 200:
+                approved = True
+                break
+            time.sleep(0.05)
+        assert approved, "Approval request req-1 was not received in time"
+        # Second decision on the same req returns 409
+        assert client.post(f"/api/chats/{cid}/approvals/req-1", headers=h, json={"allow": True}).status_code == 409
+        wait_until_idle(client, h, cid)
+
+
+def test_approval_route_needs_the_token(env, calls):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h, mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+        end = time.time() + 5
+        while time.time() < end and not calls():
+            time.sleep(0.05)
+        # Missing auth header -> 401
+        assert client.post(f"/api/chats/{cid}/approvals/req-1", json={"allow": True}).status_code == 401
+        # Bad auth header -> 401
+        assert client.post(f"/api/chats/{cid}/approvals/req-1", headers={"Authorization": "Bearer wrong"}, json={"allow": True}).status_code == 401
+        # Valid auth header -> wait until pending and approve
+        end = time.time() + 5
+        approved = False
+        while time.time() < end:
+            r = client.post(f"/api/chats/{cid}/approvals/req-1", headers=h, json={"allow": True})
+            if r.status_code == 200:
+                approved = True
+                break
+            time.sleep(0.05)
+        assert approved, "Approval request req-1 was not received in time"
+        wait_until_idle(client, h, cid)
+
+
+def test_other_modes_are_unchanged(env, calls):
+    client, h = env()
+    with client:
+        # readonly mode
+        cid_ro = new_chat(client, h, mode="readonly")
+        turn(client, h, cid_ro, "test readonly")
+        wait_until_idle(client, h, cid_ro)
+        ro_call = calls()[-1]
+        assert "--input-format" not in ro_call["argv"]
+        assert "--permission-prompts" not in ro_call["argv"]
+        assert "--permission-prompt-tool" not in ro_call["argv"]
+        assert ro_call["prompt"] == "test readonly"
+
+        # edit mode
+        cid_edit = new_chat(client, h, mode="edit")
+        turn(client, h, cid_edit, "test edit")
+        wait_until_idle(client, h, cid_edit)
+        edit_call = calls()[-1]
+        assert "--input-format" not in edit_call["argv"]
+        assert "--permission-prompts" not in edit_call["argv"]
+        assert "--permission-prompt-tool" not in edit_call["argv"]
+        assert edit_call["prompt"] == "test edit"
+
+        # ask mode: verifies it does include --input-format stream-json and permission flags
+        cid_ask = new_chat(client, h, mode="ask")
+        client.post(f"/api/chats/{cid_ask}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+        end = time.time() + 5
+        while time.time() < end and len(calls()) < 3:
+            time.sleep(0.05)
+        ask_call = calls()[-1]
+        assert "--input-format" in ask_call["argv"] and ask_call["argv"][ask_call["argv"].index("--input-format") + 1] == "stream-json"
+        assert "--permission-prompts" in ask_call["argv"] and ask_call["argv"][ask_call["argv"].index("--permission-prompts") + 1] == "host"
+        assert "--permission-prompt-tool" in ask_call["argv"] and ask_call["argv"][ask_call["argv"].index("--permission-prompt-tool") + 1] == "stdio"
+        # Finish the run
+        client.post(f"/api/chats/{cid_ask}/approvals/req-1", headers=h, json={"allow": True})
+        wait_until_idle(client, h, cid_ask)
 
 
 # --------------------------------------------------------------------------- run control

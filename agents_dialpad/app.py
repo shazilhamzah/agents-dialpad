@@ -21,12 +21,18 @@ from .runs import RunManager
 from .store import Store
 
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:\-\[\]/]{0,100}")  # never starts with '-': it is passed as an argument
+REQ_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 
 BASE_MODES = [
     {"id": "readonly", "label": "Read-only (plan)"},
     {"id": "edit", "label": "Can edit files"},
+    {"id": "ask", "label": "Ask me before commands"},
 ]
 FULL_MODE = {"id": "full", "label": "Full access (runs commands, no prompts)"}
+
+
+class ApprovalDecision(BaseModel):
+    allow: bool
 
 
 class NewChat(BaseModel):
@@ -88,6 +94,17 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         payload = push.build_payload(chat, done, bool(cfg.get("push_show_titles")))
         await asyncio.to_thread(push.send_all, subs, payload, config.DATA, cfg["push_contact"])
 
+    async def notify_approval(chat_id: str, run, ev: dict):
+        if not subs.all():
+            return
+        payload = {
+            "title": "agents-dialpad",
+            "body": "An agent needs your approval",
+            "tag": chat_id,
+            "url": "/#/c/" + chat_id,
+        }
+        await asyncio.to_thread(push.send_all, subs, payload, config.DATA, cfg["push_contact"])
+
     runs = RunManager(
         store,
         cfg["projects"],
@@ -95,6 +112,8 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         lambda: bool(cfg.get("allow_full_access")),
         keep_awake=keep_awake,
         on_finish=notify,
+        on_event=notify_approval,
+        approval_timeout=lambda: cfg.get("approval_timeout_seconds", 600),
     )
 
     def modes() -> list[dict]:
@@ -137,12 +156,24 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
 
     @api.get("/info")
     async def info(who: str = Depends(identity)):
+        def provider_modes(p) -> list[dict]:
+            all_m = modes()
+            if not getattr(p, "supports_ask", False):
+                return [m for m in all_m if m["id"] != "ask"]
+            return all_m
+
         providers = [
-            {"name": p.name, "label": p.label, "available": p.available(), "models": await p.models() if p.available() else []}
+            {
+                "name": p.name,
+                "label": p.label,
+                "available": p.available(),
+                "models": await p.models() if p.available() else [],
+                "modes": provider_modes(p),
+            }
             for p in PROVIDERS.values()
         ]
         return {
-            "providers": providers + [{**p, "available": False, "models": []} for p in PLANNED],
+            "providers": providers + [{**p, "available": False, "models": [], "modes": [m for m in modes() if m["id"] != "ask"]} for p in PLANNED],
             "projects": list(cfg["projects"]),
             "modes": modes(),
             "usage": runs.usage,
@@ -271,6 +302,8 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             raise HTTPException(400, "Unknown project")
         if body.mode not in {m["id"] for m in modes()}:
             raise HTTPException(400, "Unknown mode")
+        if body.mode == "ask" and not getattr(prov, "supports_ask", False):
+            raise HTTPException(400, f"{prov.label} can't ask before commands yet")
         await check_model(prov, body.model)
         return store.create(body.provider, body.project, body.mode, body.model)
 
@@ -461,6 +494,21 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         if run:
             run.stopped = True
             run.kill()
+        return {"ok": True}
+
+    @api.post("/chats/{chat_id}/approvals/{req_id}")
+    def decide_approval(chat_id: str, req_id: str, body: ApprovalDecision):
+        chat_or_404(chat_id)
+        if not REQ_ID_RE.match(req_id):
+            raise HTTPException(400, "Invalid request ID")
+        run = runs.active(chat_id)
+        if not run:
+            raise HTTPException(404, "No active run for this chat")
+        if req_id in run.decided:
+            raise HTTPException(409, "Approval request was already decided")
+        if req_id not in run.pending:
+            raise HTTPException(404, "Unknown approval request")
+        run.decide(req_id, body.allow)
         return {"ok": True}
 
     @api.get("/chats/{chat_id}/stream")

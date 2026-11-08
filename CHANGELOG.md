@@ -6,6 +6,7 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 ## [Unreleased]
 
 ### Added
+- **Command approvals:** "Ask me before commands" permission mode for Claude Code chats, presenting interactive cards with Allow and Deny buttons in chat, web push notifications for approval requests, and configurable auto-deny timeouts (`approval_timeout_seconds` / `AG_APPROVAL_TIMEOUT`).
 - **Per-device tokens:** Separate, revocable tokens per phone or tablet with `agents-dialpad device` and the Devices menu.
 - **Attachments:** Upload screenshots, PDFs, logs and source files via a paperclip button in the composer.
 - **Desktop sessions:** Continue recent Claude Code sessions from the computer on your phone, or copy the command to resume back at your desk.

@@ -12,6 +12,7 @@ access and deploy it accordingly.
 - **Prompt injection is real.** An agent that reads an untrusted file, web page or repo can be told to do
   things. In "Full access" it can act on them without asking. Use "Read-only" or "Can edit files" for untrusted
   projects.
+- **Command approvals:** "Ask me before commands" mode prompts for interactive confirmation before commands run. Approval endpoints (`POST /api/chats/{id}/approvals/{req_id}`) require bearer authentication. Approval requests are never auto-allowed; unanswered requests time out and auto-deny after 10 minutes (`approval_timeout_seconds` or `AG_APPROVAL_TIMEOUT`). Stopping a run cancels any pending approvals immediately. "Full access" mode remains available for trusted setups where prompt confirmation is unnecessary, but is rarely needed.
 - **Project folders are an allowlist.** The phone can only choose folders listed in `config.json` (in the data folder); it
   cannot supply a path. The agent itself is not sandboxed to that folder by agents-dialpad.
 - **Quick commands run with your full user rights, whatever the chat's permission level; only list commands you would run yourself.**

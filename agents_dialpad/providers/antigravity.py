@@ -81,6 +81,7 @@ class _Parser:
 class AntigravityProvider:
     name = "antigravity"
     label = "Antigravity"
+    supports_ask = False
 
     def available(self) -> bool:
         return _exe() is not None
@@ -146,7 +147,17 @@ class AntigravityProvider:
             _limits_cache = (time.time(), result)
         return result
 
-    async def stream(self, chat: dict, prompt: str, cwd: str, run, instructions: str = "", add_dirs: tuple[str, ...] | list[str] = ()) -> AsyncIterator[dict]:
+    async def stream(
+        self,
+        chat: dict,
+        prompt: str,
+        cwd: str,
+        run,
+        instructions: str = "",
+        add_dirs: tuple[str, ...] | list[str] = (),
+        approval_timeout: float = 600,
+        **kwargs,
+    ) -> AsyncIterator[dict]:
         exe = _exe()
         if not exe:
             raise RuntimeError("`agy` was not found on PATH (set AG_AGY to its full path).")

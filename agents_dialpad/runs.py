@@ -32,6 +32,30 @@ class Run:
         self.proc: asyncio.subprocess.Process | None = None
         self.task: asyncio.Task | None = None
         self.cond = asyncio.Condition()
+        self.pending: dict[str, asyncio.Future] = {}
+        self.decided: set[str] = set()
+
+    async def wait_decision(self, req_id: str, timeout: float) -> tuple[bool, str]:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[tuple[bool, str]] = loop.create_future()
+        self.pending[req_id] = fut
+        try:
+            return await asyncio.wait_for(fut, timeout=timeout)
+        except asyncio.TimeoutError:
+            self.decided.add(req_id)
+            return (False, "timeout")
+        finally:
+            self.pending.pop(req_id, None)
+
+    def decide(self, req_id: str, allow: bool) -> bool:
+        if req_id in self.decided:
+            return False
+        fut = self.pending.get(req_id)
+        if not fut or fut.done():
+            return False
+        self.decided.add(req_id)
+        fut.set_result((allow, "user"))
+        return True
 
     async def emit(self, ev: dict) -> None:
         async with self.cond:
@@ -44,6 +68,12 @@ class Run:
             self.cond.notify_all()
 
     def kill(self) -> None:
+        self.stopped = True
+        for req_id, fut in list(self.pending.items()):
+            self.decided.add(req_id)
+            if not fut.done():
+                fut.set_result((False, "stopped"))
+        self.pending.clear()
         proc = self.proc
         if not proc or proc.returncode is not None:
             return
@@ -72,6 +102,8 @@ class RunManager:
         allow_full=lambda: False,
         keep_awake: KeepAwake | None = None,
         on_finish=None,
+        on_event=None,
+        approval_timeout=lambda: 600.0,
     ):
         self.store = store
         self.projects = projects
@@ -79,6 +111,8 @@ class RunManager:
         self.allow_full = allow_full
         self.keep_awake = keep_awake or KeepAwake(enabled=False)
         self.on_finish = on_finish
+        self.on_event = on_event
+        self.approval_timeout = approval_timeout
         self.runs: dict[str, Run] = {}  # latest run per chat
         self.usage_path = store.dir.parent / "usage.json"  # last subscription usage, survives restarts
         self.usage: dict | None = None
@@ -124,7 +158,9 @@ class RunManager:
         try:
             # If full access was switched off in config.json, old "full" chats quietly drop to "can edit".
             effective = chat if (chat.get("mode") != "full" or self.allow_full()) else {**chat, "mode": "edit"}
-            async for ev in provider.stream(effective, text, cwd, run, self.get_instructions(), add_dirs=add_dirs):
+            async for ev in provider.stream(
+                effective, text, cwd, run, self.get_instructions(), add_dirs=add_dirs, approval_timeout=self.approval_timeout()
+            ):
                 if ev["type"] == "session" and ev.get("session_id"):
                     chat["session_id"] = ev["session_id"]
                 if ev["type"] == "usage" and ev.get("info"):
@@ -133,6 +169,13 @@ class RunManager:
                         self.usage_path.write_text(json.dumps(self.usage), encoding="utf-8")
                     except OSError:
                         pass
+                if ev["type"] == "approval" and self.on_event and not run.stopped:
+                    try:
+                        res = self.on_event(chat["id"], run, ev)
+                        if asyncio.iscoroutine(res):
+                            await res
+                    except Exception as e:
+                        print(f"on_event failed: {type(e).__name__}: {e}")
                 await run.emit(ev)
         except Exception as e:  # noqa: BLE001 - surface everything to the phone
             await run.emit({"type": "error", "message": f"{type(e).__name__}: {e}"})

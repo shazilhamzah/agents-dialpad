@@ -43,7 +43,8 @@ const ICON = {
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[n]}</svg>`;
 
-const MODE_TEXT = { readonly: 'read-only', edit: 'can edit', full: 'full access' };
+const MODE_TEXT = { readonly: 'read-only', edit: 'can edit', ask: 'ask before commands', full: 'full access' };
+const pendingApprovals = new Set();
 
 /* ===================== token + API ===================== */
 let token = LS.get('ag_token');
@@ -500,6 +501,7 @@ async function openNewChat() {
   let info; try { info = await loadInfo(); } catch (e) { return handleErr(e); }
   const first = info.providers.find((p) => p.available);
   const isClaude = (first && first.name === 'claude');
+  const firstModes = (first && first.modes) ? first.modes : info.modes;
   const dlg = openSheet(`<form id="f-new"><h2>New chat</h2>
     <label for="n-prov">Agent</label>
     <select id="n-prov">${info.providers.map((p) => `<option value="${esc(p.name)}"${p.available ? '' : ' disabled'}>${esc(p.label)}${p.available ? '' : ' (not yet)'}</option>`).join('')}</select>
@@ -508,7 +510,7 @@ async function openNewChat() {
     <label for="n-proj">Project folder</label>
     <select id="n-proj">${info.projects.map((p) => `<option>${esc(p)}</option>`).join('')}</select>
     <label for="n-mode">Permissions</label>
-    <select id="n-mode">${info.modes.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('')}</select>
+    <select id="n-mode">${firstModes.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('')}</select>
     <div class="actions"><button class="btn secondary" type="button" data-close>Cancel</button><button class="btn" type="submit" id="n-go">Start</button></div>
     <button class="btn secondary" type="button" id="btn-continue-desk" style="width: 100%; margin-top: 12px;" ${isClaude ? '' : 'hidden'}>Continue a desktop session</button>
   </form>`, 'New chat');
@@ -516,6 +518,8 @@ async function openNewChat() {
   $('#n-prov', dlg).onchange = () => {
     const prov = info.providers.find((p) => p.name === $('#n-prov', dlg).value);
     $('#n-model', dlg).innerHTML = modelOptions(prov, '');
+    const pModes = (prov && prov.modes) ? prov.modes : info.modes;
+    $('#n-mode', dlg).innerHTML = pModes.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
     $('#btn-continue-desk', dlg).hidden = $('#n-prov', dlg).value !== 'claude';
   };
   $('#btn-continue-desk', dlg).onclick = () => {
@@ -1152,7 +1156,7 @@ function toolArg(input) {
 }
 
 function assistantHTML(events, live) {
-  const blocks = [], toolById = {};
+  const blocks = [], toolById = {}, approvalById = {};
   let foot = '', denials = [];
   for (const ev of events) {
     if (ev.type === 'text') {
@@ -1163,6 +1167,14 @@ function assistantHTML(events, live) {
       toolById[ev.id] = b; blocks.push(b);
     } else if (ev.type === 'tool_result') {
       if (toolById[ev.id]) toolById[ev.id].result = ev;
+    } else if (ev.type === 'approval') {
+      const b = { kind: 'approval', id: String(ev.id), tool: ev.tool, arg: toolArg(ev.input), result: null };
+      approvalById[ev.id] = b; blocks.push(b);
+    } else if (ev.type === 'approval_result') {
+      if (approvalById[ev.id]) {
+        approvalById[ev.id].result = ev;
+        pendingApprovals.delete(String(ev.id));
+      }
     } else if (ev.type === 'done') {
       const bits = [];
       if (ev.stopped) bits.push('Stopped');
@@ -1177,6 +1189,28 @@ function assistantHTML(events, live) {
   let html = blocks.map((b) => {
     if (b.kind === 'text') return Markdown.render(b.text);
     if (b.kind === 'error') return `<div class="errbox">${icon('warn')}<span>${esc(b.text)}</span></div>`;
+    if (b.kind === 'approval') {
+      let statusHtml = '';
+      if (!b.result) {
+        if (live) {
+          const isPending = pendingApprovals.has(b.id);
+          statusHtml = `<div class="approval-actions"><button class="btn" type="button" data-approve="${esc(b.id)}" data-allow="1"${isPending ? ' disabled' : ''}>Allow</button><button class="btn secondary" type="button" data-approve="${esc(b.id)}" data-allow="0"${isPending ? ' disabled' : ''}>Deny</button></div>`;
+        } else {
+          statusHtml = '<div class="approval-status foot">Stopped</div>';
+        }
+      } else {
+        let label = 'Denied';
+        if (b.result.allow) {
+          label = 'Allowed';
+        } else if (b.result.by === 'timeout') {
+          label = 'No answer in time, so it was denied';
+        } else if (b.result.by === 'stopped') {
+          label = 'Stopped';
+        }
+        statusHtml = `<div class="approval-status foot">${esc(label)}</div>`;
+      }
+      return `<div class="approval"><div class="approval-title">Allow this?</div><div class="approval-tool"><span class="ic">${icon('term')}</span><span class="name">${esc(b.tool)}</span><span class="arg">${esc(b.arg)}</span></div>${statusHtml}</div>`;
+    }
     const status = !b.result ? '<span class="st"><span class="spin"></span></span>'
       : b.result.is_error ? `<span class="st err">${icon('x')}</span>` : `<span class="st">${icon('check')}</span>`;
     const head = `<span class="ic">${icon('term')}</span><span class="name">${esc(b.name)}</span><span class="arg">${esc(b.arg)}</span>${status}`;
@@ -1323,6 +1357,32 @@ document.addEventListener('click', async (e) => {
   const ok = await copyText(b.closest('.md-code').querySelector('code').textContent);
   b.textContent = ok ? 'Copied' : 'Copy failed'; b.classList.toggle('done', ok);
   setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('done'); }, 1600);
+});
+
+/* ---- approval buttons (Allow / Deny) ---- */
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-approve]');
+  if (!b || b.disabled) return;
+  const reqId = b.dataset.approve;
+  const allow = b.dataset.allow === '1';
+  if (!cur || !cur.chat) return;
+  const chatId = cur.chat.id;
+
+  pendingApprovals.add(reqId);
+  const card = b.closest('.approval');
+  const allBtns = card ? card.querySelectorAll('[data-approve]') : [b];
+  allBtns.forEach((btn) => { btn.disabled = true; });
+
+  try {
+    await api(`/chats/${chatId}/approvals/${encodeURIComponent(reqId)}`, {
+      method: 'POST',
+      body: JSON.stringify({ allow }),
+    });
+  } catch (err) {
+    pendingApprovals.delete(reqId);
+    allBtns.forEach((btn) => { btn.disabled = false; });
+    toast(err.message || 'Approval failed');
+  }
 });
 
 /* ---- keep the composer above the on-screen keyboard (iOS does not resize the layout viewport) ---- */

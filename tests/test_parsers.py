@@ -63,6 +63,56 @@ def test_claude_rate_limit_becomes_usage():
     assert ev == {"type": "usage", "info": {"status": "allowed"}}
 
 
+def test_claude_control_request_becomes_approval():
+    p = claude._Parser()
+    req = {
+        "type": "control_request",
+        "request_id": "req-123",
+        "request": {
+            "subtype": "can_use_tool",
+            "tool_name": "PowerShell",
+            "input": {"command": "dir"},
+        },
+    }
+    (ev,) = p.feed(req)
+    assert ev == {"type": "approval", "id": "req-123", "tool": "PowerShell", "input": {"command": "dir"}}
+
+
+def test_claude_parses_recorded_control_fixtures():
+    import json
+    from pathlib import Path
+
+    fixture_dir = Path(__file__).parent / "fixtures" / "claude_control"
+    assert (fixture_dir / "allow_run.jsonl").exists()
+    assert (fixture_dir / "deny_run.jsonl").exists()
+
+    # Allow fixture
+    p_allow = claude._Parser()
+    allow_events = []
+    with open(fixture_dir / "allow_run.jsonl", encoding="utf-8") as f:
+        for line in f:
+            allow_events += p_allow.feed(json.loads(line))
+    event_types = [e["type"] for e in allow_events]
+    assert "session" in event_types
+    assert "approval" in event_types
+    assert "done" in event_types
+    appr = next(e for e in allow_events if e["type"] == "approval")
+    assert appr["tool"] in ("PowerShell", "Bash")
+
+    # Deny fixture
+    p_deny = claude._Parser()
+    deny_events = []
+    with open(fixture_dir / "deny_run.jsonl", encoding="utf-8") as f:
+        for line in f:
+            deny_events += p_deny.feed(json.loads(line))
+    deny_types = [e["type"] for e in deny_events]
+    assert "session" in deny_types
+    assert "approval" in deny_types
+    assert "done" in deny_types
+    done = next(e for e in deny_events if e["type"] == "done")
+    assert len(done["denials"]) > 0
+
+
 # ---------------------------------------------------------------- Antigravity
 def test_agy_text_session_and_result():
     evs = feed_all(antigravity._Parser(), [
