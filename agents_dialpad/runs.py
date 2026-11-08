@@ -13,6 +13,7 @@ import subprocess
 import time
 import uuid
 
+from .keepawake import KeepAwake
 from .providers import PROVIDERS
 from .store import Store
 
@@ -65,11 +66,19 @@ def _compact(events: list[dict]) -> list[dict]:
 
 
 class RunManager:
-    def __init__(self, store: Store, projects: dict[str, str], get_instructions=lambda: "", allow_full=lambda: False):
+    def __init__(
+        self,
+        store: Store,
+        projects: dict[str, str],
+        get_instructions=lambda: "",
+        allow_full=lambda: False,
+        keep_awake: KeepAwake | None = None,
+    ):
         self.store = store
         self.projects = projects
         self.get_instructions = get_instructions
         self.allow_full = allow_full
+        self.keep_awake = keep_awake or KeepAwake(enabled=False)
         self.runs: dict[str, Run] = {}  # latest run per chat
         self.usage_path = store.dir.parent / "usage.json"  # last subscription usage, survives restarts
         self.usage: dict | None = None
@@ -90,6 +99,7 @@ class RunManager:
             chat["title"] = " ".join(text.split())[:48] or "New chat"
         chat["updated"] = time.time()
         self.store.save(chat)
+        self.keep_awake.acquire()
         run.task = asyncio.create_task(self._drive(chat, run, text))  # keep a reference
         return run
 
@@ -112,6 +122,7 @@ class RunManager:
         except Exception as e:  # noqa: BLE001 - surface everything to the phone
             await run.emit({"type": "error", "message": f"{type(e).__name__}: {e}"})
         finally:
+            self.keep_awake.release()
             if self.store.exists(chat["id"]):  # not deleted while the turn was running
                 chat["messages"].append(
                     {"role": "assistant", "run_id": run.id, "events": _compact(run.events), "ts": time.time()}

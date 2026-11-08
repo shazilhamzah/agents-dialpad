@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from agents_dialpad import config
 from agents_dialpad.app import create_app
+from agents_dialpad.keepawake import KeepAwake
 from agents_dialpad.providers import antigravity
 
 FAKES = Path(__file__).parent / "fake_agents"
@@ -29,10 +30,10 @@ def env(tmp_path, monkeypatch):
     (tmp_path / "ws").mkdir()
     base = {"projects": {"workspace": str(tmp_path / "ws")}}
 
-    def make(**extra):
+    def make(keep_awake=None, **extra):
         (tmp_path / "config.json").write_text(json.dumps({**base, **extra}), encoding="utf-8")
         cfg, token = config.load()
-        return TestClient(create_app(cfg, token)), {"Authorization": "Bearer " + token}
+        return TestClient(create_app(cfg, token, keep_awake=keep_awake)), {"Authorization": "Bearer " + token}
 
     return make
 
@@ -291,3 +292,40 @@ def test_chats_survive_a_restart(env):
         chats = client.get("/api/chats", headers=h).json()["chats"]
         assert [c["id"] for c in chats] == [cid] and chats[0]["title"] == "remember me"
         assert client.get(f"/api/chats/{cid}", headers=h).json()["messages"][0]["text"] == "remember me"
+
+
+# --------------------------------------------------------------------------- keep awake
+class _FakeKeepAwakeBackend:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def on(self) -> None:
+        self.calls.append("on")
+
+    def off(self) -> None:
+        self.calls.append("off")
+
+
+def test_computer_stays_awake_only_while_a_reply_runs(env):
+    backend = _FakeKeepAwakeBackend()
+    client, h = env(keep_awake=KeepAwake(enabled=True, backend=backend))
+    with client:
+        cid = new_chat(client, h)
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "SLOW"})
+        time.sleep(1)
+        assert backend.calls == ["on"]
+        client.post(f"/api/chats/{cid}/stop", headers=h)
+        wait_until_idle(client, h, cid)
+        assert backend.calls == ["on", "off"]
+
+
+def test_keep_awake_survives_a_failing_agent(env, monkeypatch, tmp_path):
+    backend = _FakeKeepAwakeBackend()
+    client, h = env(keep_awake=KeepAwake(enabled=True, backend=backend))
+    with client:
+        cid = new_chat(client, h)
+        monkeypatch.setenv("AG_CLAUDE", str(tmp_path / "nope"))
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "x"})
+        wait_until_idle(client, h, cid)
+        assert backend.calls[-1] == "off"
+

@@ -100,8 +100,9 @@ Python that ran the command, and `uvx` environments are temporary.
 | macOS | A launchd agent (`~/Library/LaunchAgents/io.github.shazilhamzah.agents-dialpad.plist`) with `KeepAlive`. | Yes, immediately |
 | Linux | A systemd user service (`~/.config/systemd/user/agents-dialpad.service`) with `Restart=always`. Run `loginctl enable-linger $USER` to keep it running when you are logged out. | Yes, after 5 s |
 
-Background output goes to `gateway.log` in the data folder, and the access token is never written to it. Sleep pauses
-the server and it resumes on wake, but your phone cannot reach it while the computer sleeps.
+Background output goes to `gateway.log` in the data folder, and the access token is never written to it. While at least
+one agent reply is running, agents-dialpad asks the OS not to idle-sleep (disable with `"keep_awake": false`). Closing a
+laptop lid is still controlled by your OS power settings, and your phone cannot reach the computer while it sleeps.
 
 **Extra Windows helpers (in a git checkout, `scripts/`):**
 `launch.ps1` (start everything, check Tailscale, open the app), `create-shortcut.ps1` (puts an *agents-dialpad* icon on your
@@ -117,6 +118,7 @@ Everything lives in `config.json` in the data folder (see [`config.example.json`
 | `projects` | `name → folder`. The phone can only pick from this list, it can never type a path. Relative paths are relative to the data folder. Manage with `agents-dialpad project`. |
 | `token` | Optional fixed access token (16+ characters). |
 | `instructions_file` | Optional text file added to every conversation. Default `null` (none). Re-read every turn. See below. |
+| `keep_awake` | Prevent idle sleep while an agent reply is running. Default `true`. |
 | `allow_full_access` | `true` adds the **Full access** permission level (see below). Default off. |
 
 ### Access token

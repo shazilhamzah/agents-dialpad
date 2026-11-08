@@ -6,5 +6,6 @@
     "my-app": "C:\\path\\to\\my-app"
   },
   "instructions_file": null,
+  "keep_awake": true,
   "allow_full_access": false
 }

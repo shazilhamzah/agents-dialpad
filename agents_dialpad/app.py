@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import config
+from .keepawake import KeepAwake
 from .providers import PLANNED, PROVIDERS
 from .runs import RunManager
 from .store import Store
@@ -41,11 +42,18 @@ class NewMessage(BaseModel):
     text: str = Field(min_length=1, max_length=100_000)
 
 
-def create_app(cfg: dict | None = None, token: str | None = None) -> FastAPI:
+def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: KeepAwake | None = None) -> FastAPI:
     if cfg is None or token is None:
         cfg, token = config.load()
+    keep_awake = keep_awake or KeepAwake(enabled=bool(cfg.get("keep_awake", True)))
     store = Store(config.DATA / "chats")
-    runs = RunManager(store, cfg["projects"], lambda: config.read_instructions(cfg), lambda: bool(cfg.get("allow_full_access")))
+    runs = RunManager(
+        store,
+        cfg["projects"],
+        lambda: config.read_instructions(cfg),
+        lambda: bool(cfg.get("allow_full_access")),
+        keep_awake=keep_awake,
+    )
 
     def modes() -> list[dict]:
         """'Full access' only exists when `"allow_full_access": true` is set in config.json."""
@@ -84,6 +92,7 @@ def create_app(cfg: dict | None = None, token: str | None = None) -> FastAPI:
             "projects": list(cfg["projects"]),
             "modes": modes(),
             "usage": runs.usage,
+            "keep_awake": keep_awake.enabled,
         }
 
     def claude_limits() -> dict:

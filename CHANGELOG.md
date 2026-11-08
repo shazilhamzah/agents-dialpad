@@ -6,6 +6,7 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 ## [Unreleased]
 
 ### Added
+- Keeps the computer awake while an agent is working (`keep_awake`).
 - **Installable package.** `uv tool install git+https://github.com/shazilhamzah/agents-dialpad` (or pipx) gives an
   `agents-dialpad` command; the UI ships inside the wheel. PyPI publishing is wired up and opt-in.
 - **Command line:** `serve`, `init`, `project add|list|remove`, `token [--rotate]`, `doctor`, `autostart install|uninstall|status`.

@@ -90,6 +90,7 @@ def load() -> tuple[dict, str]:
     cfg["projects"] = {name: str(p if (p := Path(raw)).is_absolute() else DATA / p) for name, raw in cfg["projects"].items()}
     # Optional text file added to every conversation (none by default). Example: "instructions/caveman.md".
     cfg.setdefault("instructions_file", None)
+    cfg.setdefault("keep_awake", True)
 
     token = os.environ.get("AG_TOKEN") or cfg.get("token")
     if token:

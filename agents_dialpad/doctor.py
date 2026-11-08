@@ -11,7 +11,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config
+from . import config, keepawake
 
 
 @dataclass
@@ -110,6 +110,12 @@ def run_checks() -> list[Check]:
     if cfg.get("instructions_file"):
         p = config.resolve_instructions_path(cfg["instructions_file"])
         checks.append(Check("ok" if p.is_file() else "warn", "Instructions file", str(p), "" if p.is_file() else "File not found; it is ignored."))
+    if not cfg.get("keep_awake", True):
+        checks.append(Check("warn", "Keep awake while working", "off (keep_awake is false)"))
+    elif isinstance(keepawake.default_backend(), keepawake._Noop):
+        checks.append(Check("warn", "Keep awake while working", "not supported on this system"))
+    else:
+        checks.append(Check("ok", "Keep awake while working", "on"))
     if cfg.get("allow_full_access"):
         checks.append(Check("warn", "Full access", "enabled", "Agents can run commands without asking. Only use it on projects you trust."))
     checks.extend(agent_checks())
