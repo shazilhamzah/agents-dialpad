@@ -216,6 +216,14 @@ Work started at your computer can be picked up on your phone, and vice-versa (Cl
 - **Desk to phone:** When creating a new Claude chat, tap **Continue a desktop session** to pick from recent sessions in that project folder. The phone resumes that session (`claude --resume <id>`).
 - **Phone to desk:** In any Claude chat, tap **More → Continue on the computer** to copy the terminal command (`claude --resume <id>`) to run at your desk.
 
+## Attachments
+
+Tap the paperclip icon next to the message field to attach screenshots, logs, or documents:
+
+- **Supported formats:** Images (`png`, `jpg`, `jpeg`, `gif`, `webp`, `heic`), documents (`pdf`, `txt`, `md`, `csv`, `json`, `log`, `yaml`, `yml`, `xml`), and code files (`html`, `css`, `js`, `ts`, `py`).
+- **Limits:** Up to 15 MB per file, max 10 files per message, and 200 MB per chat.
+- **Storage:** Files are stored in `<data>/uploads/<chat-id>/` (outside project folders) and passed to the agent via `--add-dir`. Deleting a chat deletes its uploads.
+
 ## Reviewing changes
 
 After an agent edits files, tap **More → Changes** in that chat to review what changed:
@@ -241,7 +249,7 @@ After an agent edits files, tap **More → Changes** in that chat to review what
 - Codex is not implemented yet (its `codex exec --json` mode is the likely route).
 - Antigravity does not report tool output (only which tool ran) or cost.
 - Antigravity prompts go on the command line, so messages over ~28k characters are rejected.
-- No in-app approval prompts or file/image upload.
+- No in-app approval prompts.
 - Real agents are only tested on Windows; the computer must stay awake and signed in.
 
 ## Contributing

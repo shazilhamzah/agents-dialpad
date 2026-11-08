@@ -485,3 +485,41 @@ dialog.sheet.wide { width: min(94vw, 60rem); }
 }
 .code-box pre { margin: 0; flex: 1; min-width: 0; overflow-x: auto; font-family: var(--font-mono); font-size: .8125rem; }
 .code-box code { white-space: pre; }
+
+/* attachments */
+.attachments-row {
+  display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 12px 2px;
+}
+.att-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 14rem; height: 32px;
+  padding: 0 8px 0 6px; background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 999px; font-size: .8125rem; color: var(--text);
+}
+.att-chip.loading { opacity: .7; }
+.att-thumb { width: 20px; height: 20px; border-radius: 4px; object-fit: cover; }
+.att-icon { display: flex; align-items: center; color: var(--text-3); }
+.att-icon svg.i { width: 1rem; height: 1rem; }
+.att-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-spin {
+  display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line-strong);
+  border-top-color: var(--accent); border-radius: 50%; animation: spin 800ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.att-rm { width: 20px; height: 20px; border: 0; background: transparent; cursor: pointer; color: var(--text-3); display: flex; align-items: center; justify-content: center; padding: 0; }
+.att-rm:hover { color: var(--text); }
+.att-rm svg.i { width: .875rem; height: .875rem; }
+
+.clip-btn { flex: none; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; cursor: pointer; border-radius: var(--r-s); }
+.clip-btn svg.i { width: 1.25rem; height: 1.25rem; color: var(--text-2); }
+.clip-btn:hover { background: var(--surface-2); }
+.clip-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.msg-attachments {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, .25);
+}
+.msg-att-chip {
+  display: inline-flex; align-items: center; gap: 4px; font-size: .75rem;
+  opacity: .9; word-break: break-all;
+}
+.msg-att-chip svg.i { width: .875rem; height: .875rem; flex: none; }

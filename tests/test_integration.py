@@ -702,3 +702,134 @@ def test_desk_sessions_need_the_token(env):
     with client:
         assert client.get("/api/projects/workspace/desk-sessions").status_code == 401
         assert client.post("/api/chats/import", json={"project": "workspace", "session_id": "00000000-0000-0000-0000-000000000000"}).status_code == 401
+
+
+# --------------------------------------------------------------------------- uploads (B4)
+def test_upload_then_send_gives_the_agent_access(env, calls):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h, provider="claude")
+
+        # Upload a file
+        r = client.put(
+            f"/api/chats/{cid}/uploads?name=error.log",
+            headers={**h, "Content-Type": "text/plain"},
+            content=b"FATAL: crash dump\n",
+        )
+        assert r.status_code == 200
+        stored = r.json()
+        assert stored["name"].endswith("-error.log")
+
+        # Send message with attachment
+        r_msg = client.post(
+            f"/api/chats/{cid}/messages",
+            headers=h,
+            json={"text": "check this crash", "attachments": [stored["name"]]},
+        )
+        assert r_msg.status_code == 202
+        wait_until_idle(client, h, cid)
+
+        last_call = calls()[-1]
+        assert "--add-dir" in last_call["argv"]
+        add_dir_idx = last_call["argv"].index("--add-dir")
+        dir_arg = last_call["argv"][add_dir_idx + 1]
+        assert cid in dir_arg
+
+        prompt = last_call["prompt"]
+        assert "check this crash" in prompt
+        assert "Attached files (read them from these paths):" in prompt
+        assert stored["name"] in prompt
+
+
+def test_upload_limits(env):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h)
+
+        # 415 on bad type
+        r_bad = client.put(
+            f"/api/chats/{cid}/uploads?name=malware.exe",
+            headers={**h, "Content-Type": "application/octet-stream"},
+            content=b"bad content",
+        )
+        assert r_bad.status_code == 415
+
+        # 413 on declared too large
+        r_decl = client.put(
+            f"/api/chats/{cid}/uploads?name=big.txt",
+            headers={**h, "Content-Length": str(20 * 1024 * 1024), "Content-Type": "text/plain"},
+            content=b"pretend big",
+        )
+        assert r_decl.status_code == 413
+
+
+def test_attachments_must_belong_to_the_chat(env):
+    client, h = env()
+    with client:
+        cid1 = new_chat(client, h)
+        cid2 = new_chat(client, h)
+
+        r = client.put(
+            f"/api/chats/{cid1}/uploads?name=note.txt",
+            headers={**h, "Content-Type": "text/plain"},
+            content=b"hello",
+        )
+        stored_name = r.json()["name"]
+
+        # cid2 attempts to use cid1's attachment
+        r_foreign = client.post(
+            f"/api/chats/{cid2}/messages",
+            headers=h,
+            json={"text": "use foreign file", "attachments": [stored_name]},
+        )
+        assert r_foreign.status_code == 400
+
+
+def test_deleting_a_chat_removes_its_uploads(env, tmp_path):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h)
+        r = client.put(
+            f"/api/chats/{cid}/uploads?name=test.txt",
+            headers={**h, "Content-Type": "text/plain"},
+            content=b"data",
+        )
+        assert r.status_code == 200
+
+        udir = tmp_path / "uploads" / cid
+        assert udir.exists()
+
+        client.delete(f"/api/chats/{cid}", headers=h)
+        assert not udir.exists()
+
+
+def test_antigravity_also_gets_the_folder(env, calls):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h, provider="antigravity")
+        r = client.put(
+            f"/api/chats/{cid}/uploads?name=spec.md",
+            headers={**h, "Content-Type": "text/markdown"},
+            content=b"# Spec",
+        )
+        stored = r.json()
+
+        client.post(
+            f"/api/chats/{cid}/messages",
+            headers=h,
+            json={"text": "look at spec", "attachments": [stored["name"]]},
+        )
+        wait_until_idle(client, h, cid)
+
+        last_call = calls()[-1]
+        assert "--add-dir" in last_call["argv"]
+        add_dir_idx = last_call["argv"].index("--add-dir")
+        dir_arg = last_call["argv"][add_dir_idx + 1]
+        assert cid in dir_arg
+
+
+def test_upload_needs_the_token(env):
+    client, h = env()
+    with client:
+        cid = new_chat(client, h)
+    assert client.put(f"/api/chats/{cid}/uploads?name=test.txt", content=b"unauth").status_code == 401

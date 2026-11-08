@@ -74,7 +74,7 @@ Tips for the person supervising:
 - [x] B1 Push notifications
 - [x] B2 Change viewer
 - [x] B3 Desktop sessions
-- [ ] B4 Uploads
+- [x] B4 Uploads
 - [ ] B5 Device tokens
 - [ ] C1 Approvals (spike → Claude → Antigravity)
 - [ ] C2 Codex

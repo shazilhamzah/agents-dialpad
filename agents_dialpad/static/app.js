@@ -37,6 +37,8 @@ const ICON = {
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   diff: '<path d="M12 3v14M5 10h14M5 21h14"/>',
+  clip: '<path d="m21 12-8.5 8.5a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.66 5.66l-9 9a2 2 0 0 1-2.83-2.83L15 7"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[n]}</svg>`;
 
@@ -64,6 +66,24 @@ async function api(path, opts = {}) {
   return r;
 }
 const getJSON = async (p, o) => (await api(p, o)).json();
+async function uploadFile(chatId, file) {
+  const headers = {
+    Authorization: 'Bearer ' + token,
+    'Content-Type': file.type || 'application/octet-stream',
+  };
+  const r = await fetch('/api/chats/' + encodeURIComponent(chatId) + '/uploads?name=' + encodeURIComponent(file.name), {
+    method: 'PUT',
+    headers,
+    body: file,
+  });
+  if (r.status === 401) throw new AuthError();
+  if (!r.ok) {
+    let msg = r.statusText;
+    try { msg = (await r.json()).detail || msg; } catch { /* not json */ }
+    throw new Error(msg);
+  }
+  return r.json();
+}
 function forgetToken() { LS.del('ag_token'); token = null; }
 
 /* ===================== state ===================== */
@@ -564,7 +584,7 @@ async function openChat(id) {
     try { state.quick[chat.project] = await getJSON('/projects/' + encodeURIComponent(chat.project) + '/commands'); }
     catch { state.quick[chat.project] = []; }
   }
-  cur = { chat, live: null, ctrl: null, gen: 0 };
+  cur = { chat, live: null, ctrl: null, gen: 0, pending: [], uploading: 0 };
   state.openTools = new Set();
   buildPane();
   renderThread(); scrollToEnd(true);
@@ -586,8 +606,11 @@ function buildPane() {
     </div>
     <div class="sr" id="sr" role="status"></div>
     <form class="composer" id="composer" autocomplete="off"><div class="composer-in">
+      <div id="attachments" class="attachments-row" hidden></div>
       <div class="meta-row"><button class="chip" id="btn-model" type="button" aria-label="Change model"><span id="model-label"></span>${icon('chev')}</button></div>
       <div class="row">
+        <input type="file" id="file-input" multiple accept="image/*,.pdf,.txt,.md,.csv,.json,.log,.yaml,.yml,.xml,.html,.css,.js,.ts,.py" hidden>
+        <button class="icon-btn clip-btn" id="btn-clip" type="button" aria-label="Attach files">${icon('clip')}</button>
         <div class="field"><label class="sr" for="input">Message</label>
           <textarea id="input" rows="1" placeholder="Message" enterkeyhint="send"></textarea></div>
         <button class="send" id="send" type="submit" aria-label="Send">${icon('up')}</button>
@@ -605,6 +628,87 @@ function buildPane() {
     const d = e.target; if (!d.matches || !d.matches('details.tool')) return;
     if (d.open) state.openTools.add(d.dataset.id); else state.openTools.delete(d.dataset.id);
   }, true);
+
+  function updateSendBtn() {
+    const btn = $('#send');
+    if (!btn || !cur) return;
+    if (cur.uploading && cur.uploading > 0) btn.disabled = true;
+    else btn.disabled = false;
+  }
+
+  function renderAttachments() {
+    const container = $('#attachments');
+    if (!container || !cur) return;
+    if (!cur.pending || !cur.pending.length) {
+      container.innerHTML = '';
+      container.hidden = true;
+      return;
+    }
+    container.hidden = false;
+    container.innerHTML = cur.pending.map((item, idx) => {
+      const thumb = item.url
+        ? `<img class="att-thumb" src="${item.url}" alt="">`
+        : `<span class="att-icon">${icon('file')}</span>`;
+      const spin = item.loading ? `<span class="att-spin" aria-label="Uploading"></span>` : '';
+      return `
+        <div class="att-chip ${item.loading ? 'loading' : ''}">
+          ${thumb}
+          <span class="att-name" title="${esc(item.label)}">${esc(item.label)}</span>
+          ${spin}
+          <button class="att-rm icon-btn" type="button" data-idx="${idx}" aria-label="Remove ${esc(item.label)}">
+            ${icon('x')}
+          </button>
+        </div>`;
+    }).join('');
+
+    $$('.att-rm', container).forEach((b) => {
+      b.onclick = () => {
+        const idx = parseInt(b.dataset.idx, 10);
+        const item = cur.pending[idx];
+        if (item && item.url) URL.revokeObjectURL(item.url);
+        cur.pending.splice(idx, 1);
+        renderAttachments();
+        updateSendBtn();
+      };
+    });
+  }
+
+  const fileInput = $('#file-input');
+  $('#btn-clip').onclick = () => fileInput.click();
+  fileInput.onchange = async () => {
+    const files = Array.from(fileInput.files || []);
+    fileInput.value = '';
+    if (!files.length) return;
+    if ((cur.pending.length + files.length) > 10) {
+      return toast('Maximum 10 attachments per message');
+    }
+    for (const file of files) {
+      const isImg = file.type.startsWith('image/');
+      const item = {
+        name: '',
+        label: file.name,
+        url: isImg ? URL.createObjectURL(file) : null,
+        loading: true,
+      };
+      cur.pending.push(item);
+      renderAttachments();
+      cur.uploading = (cur.uploading || 0) + 1;
+      updateSendBtn();
+      try {
+        const res = await uploadFile(cur.chat.id, file);
+        item.name = res.name;
+        item.loading = false;
+      } catch (e) {
+        if (item.url) URL.revokeObjectURL(item.url);
+        cur.pending = cur.pending.filter((x) => x !== item);
+        handleErr(e);
+      } finally {
+        cur.uploading = Math.max(0, (cur.uploading || 1) - 1);
+        updateSendBtn();
+        renderAttachments();
+      }
+    }
+  };
 
   $('#btn-model').onclick = openModelPicker;
   $('#btn-more').onclick = (e) => {
@@ -1002,7 +1106,13 @@ function assistantHTML(events, live) {
 }
 
 function msgHTML(m) {
-  if (m.role === 'user') return `<div class="msg user"><div class="bubble">${esc(m.text)}</div></div>`;
+  if (m.role === 'user') {
+    let attHtml = '';
+    if (m.attachments && m.attachments.length) {
+      attHtml = `<div class="msg-attachments">${m.attachments.map((a) => `<span class="msg-att-chip">${icon('clip')}${esc(a)}</span>`).join('')}</div>`;
+    }
+    return `<div class="msg user"><div class="bubble">${esc(m.text)}${attHtml}</div></div>`;
+  }
   return `<div class="msg assistant"><div class="prose">${assistantHTML(m.events || [], false)}</div></div>`;
 }
 function renderThread() {
@@ -1042,13 +1152,24 @@ function setRunning(on) {
 
 /* ---- sending + streaming ---- */
 async function sendMessage() {
-  if (!cur || cur.live) return;
-  const input = $('#input'), text = input.value.trim(); if (!text) return;
+  if (!cur || cur.live || (cur.uploading && cur.uploading > 0)) return;
+  const input = $('#input');
+  let text = input.value.trim();
+  const attachments = (cur.pending || []).filter((p) => !p.loading && p.name).map((p) => p.name);
+  if (!text && !attachments.length) return;
+  if (!text && attachments.length) text = 'See the attached files.';
+
+  (cur.pending || []).forEach((p) => { if (p.url) URL.revokeObjectURL(p.url); });
+  const pendingLabels = (cur.pending || []).map((p) => p.label || p.name);
+  cur.pending = [];
+  const attRow = $('#attachments');
+  if (attRow) { attRow.innerHTML = ''; attRow.hidden = true; }
+
   input.value = ''; delete state.drafts[cur.chat.id]; autosize();
-  cur.chat.messages.push({ role: 'user', text });
+  cur.chat.messages.push({ role: 'user', text, attachments: pendingLabels });
   renderThread(); scrollToEnd(true);
   try {
-    await api(`/chats/${cur.chat.id}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
+    await api(`/chats/${cur.chat.id}/messages`, { method: 'POST', body: JSON.stringify({ text, attachments }) });
   } catch (e) {
     if (e instanceof AuthError) return handleErr(e);
     toast(e.message); input.value = text; autosize();

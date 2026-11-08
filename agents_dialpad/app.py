@@ -7,14 +7,14 @@ import re
 import secrets
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from pathlib import Path
 import sys
-from . import config, desk, export, gitview, pairing, push, quick
+from . import config, desk, export, gitview, pairing, push, quick, uploads
 from .keepawake import KeepAwake
 from .providers import PLANNED, PROVIDERS
 from .runs import RunManager
@@ -43,7 +43,8 @@ class ChatPatch(BaseModel):
 
 
 class NewMessage(BaseModel):
-    text: str = Field(min_length=1, max_length=100_000)
+    text: str = Field(default="", max_length=100_000)
+    attachments: list[str] = Field(default_factory=list, max_length=10)
 
 
 class PushSubscribe(BaseModel):
@@ -375,6 +376,19 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             chat["project_path"] = str(Path(cfg["projects"][chat["project"]]).resolve())
         return chat
 
+    @api.put("/chats/{chat_id}/uploads")
+    async def upload(chat_id: str, request: Request, name: str = Query(..., min_length=1, max_length=200)):
+        chat_or_404(chat_id)
+        declared = int(request.headers.get("content-length") or 0)
+        if declared > uploads.MAX_FILE:
+            raise HTTPException(413, "That file is larger than 15 MB")
+        data = bytearray()
+        async for chunk in request.stream():
+            data += chunk
+            if len(data) > uploads.MAX_FILE:
+                raise HTTPException(413, "That file is larger than 15 MB")
+        return uploads.save(chat_id, name, bytes(data))
+
     @api.delete("/chats/{chat_id}")
     async def delete_chat(chat_id: str):
         chat_or_404(chat_id)
@@ -383,6 +397,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             run.stopped = True
             run.kill()
         store.delete(chat_id)
+        uploads.remove_all(chat_id)
         return {"ok": True}
 
     @api.post("/chats/{chat_id}/messages", status_code=202)
@@ -390,7 +405,17 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         chat = chat_or_404(chat_id)
         if runs.active(chat_id):
             raise HTTPException(409, "This chat is already running")
-        run = runs.start(chat, body.text)
+        text = body.text
+        if not text.strip():
+            if body.attachments:
+                text = "See the attached files."
+            else:
+                raise HTTPException(400, "Message cannot be empty")
+        try:
+            paths = uploads.resolve(chat_id, body.attachments)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        run = runs.start(chat, text, attachments=paths)
         return {"run_id": run.id}
 
     @api.post("/chats/{chat_id}/stop")

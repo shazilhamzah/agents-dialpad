@@ -146,7 +146,7 @@ class AntigravityProvider:
             _limits_cache = (time.time(), result)
         return result
 
-    async def stream(self, chat: dict, prompt: str, cwd: str, run, instructions: str = "") -> AsyncIterator[dict]:
+    async def stream(self, chat: dict, prompt: str, cwd: str, run, instructions: str = "", add_dirs: tuple[str, ...] | list[str] = ()) -> AsyncIterator[dict]:
         exe = _exe()
         if not exe:
             raise RuntimeError("`agy` was not found on PATH (set AG_AGY to its full path).")
@@ -157,6 +157,8 @@ class AntigravityProvider:
             raise RuntimeError(f"Message too long for Antigravity ({len(prompt)} chars; limit {MAX_PROMPT_CHARS}).")
 
         args = [exe, *extra_args("AG_AGY_ARGS"), "--output-format", "stream-json", "--mode", MODES.get(chat.get("mode"), "plan")]
+        for d in add_dirs:
+            args += ["--add-dir", d]
         if chat.get("mode") == "full":
             args.append("--dangerously-skip-permissions")  # headless cannot prompt; the CLI still blocks its system denylist
         if chat.get("model"):

@@ -17,6 +17,7 @@ access and deploy it accordingly.
 - **Quick commands run with your full user rights, whatever the chat's permission level; only list commands you would run yourself.**
 - **Push notifications travel through the browser vendor's push service** (Apple, Google, Mozilla). Payloads are end-to-end encrypted according to the Web Push standard (RFC 8291). Push bodies are generic by default (`Your reply is ready`) and do not disclose chat contents unless `push_show_titles` is set to true in `config.json`.
 - **Desktop session previews:** Authenticated devices can list recent Claude Code sessions and read their first user prompt previews only for configured project folders.
+- **Uploaded files:** Files and screenshots attached in chats are stored unencrypted in the data folder and are readable by the agent via `--add-dir`.
 - **Provider logins are never read.** agents-dialpad only launches the official CLIs. It stores chat transcripts and
   your token in the data folder, unencrypted, so protect that folder like any other secret. Background services run with
   `--quiet`, so the token is never written to their logs; `agents-dialpad token` prints it on demand.

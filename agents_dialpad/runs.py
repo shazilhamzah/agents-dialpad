@@ -16,6 +16,8 @@ import uuid
 from .keepawake import KeepAwake
 from .proc import kill_tree
 from .providers import PROVIDERS
+from pathlib import Path
+from . import uploads
 from .store import Store
 
 
@@ -92,25 +94,37 @@ class RunManager:
     def active_in_project(self, project: str) -> bool:
         return any(r.project == project for r in self.runs.values() if not r.done)
 
-    def start(self, chat: dict, text: str) -> Run:
+    def start(self, chat: dict, text: str, attachments: list[Path] = ()) -> Run:
         run = Run(chat["id"], project=chat.get("project", ""))
         self.runs[chat["id"]] = run
-        chat["messages"].append({"role": "user", "text": text, "ts": time.time()})
+        user_msg = {"role": "user", "text": text, "ts": time.time()}
+        if attachments:
+            user_msg["attachments"] = [p.name for p in attachments]
+        chat["messages"].append(user_msg)
         if chat["title"] == "New chat":
             chat["title"] = " ".join(text.split())[:48] or "New chat"
         chat["updated"] = time.time()
         self.store.save(chat)
         self.keep_awake.acquire()
-        run.task = asyncio.create_task(self._drive(chat, run, text))  # keep a reference
+        prompt_text = text
+        if attachments:
+            prompt_text = (
+                text
+                + "\n\nAttached files (read them from these paths):\n"
+                + "\n".join(f"- {p}" for p in attachments)
+            )
+        udir = uploads.upload_dir(chat["id"])
+        add_dirs = [str(udir)] if (attachments or udir.exists()) else []
+        run.task = asyncio.create_task(self._drive(chat, run, prompt_text, add_dirs=add_dirs))
         return run
 
-    async def _drive(self, chat: dict, run: Run, text: str) -> None:
+    async def _drive(self, chat: dict, run: Run, text: str, add_dirs: list[str] = ()) -> None:
         provider = PROVIDERS[chat["provider"]]
         cwd = self.projects[chat["project"]]
         try:
             # If full access was switched off in config.json, old "full" chats quietly drop to "can edit".
             effective = chat if (chat.get("mode") != "full" or self.allow_full()) else {**chat, "mode": "edit"}
-            async for ev in provider.stream(effective, text, cwd, run, self.get_instructions()):
+            async for ev in provider.stream(effective, text, cwd, run, self.get_instructions(), add_dirs=add_dirs):
                 if ev["type"] == "session" and ev.get("session_id"):
                     chat["session_id"] = ev["session_id"]
                 if ev["type"] == "usage" and ev.get("info"):

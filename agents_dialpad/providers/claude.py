@@ -122,7 +122,7 @@ class ClaudeProvider:
     async def models(self) -> list[dict]:
         return self.MODELS
 
-    async def stream(self, chat: dict, prompt: str, cwd: str, run, instructions: str = "") -> AsyncIterator[dict]:
+    async def stream(self, chat: dict, prompt: str, cwd: str, run, instructions: str = "", add_dirs: tuple[str, ...] | list[str] = ()) -> AsyncIterator[dict]:
         exe = _exe()
         if not exe:
             raise RuntimeError("`claude` was not found on PATH (set AG_CLAUDE to its full path).")
@@ -133,6 +133,8 @@ class ClaudeProvider:
             "--include-partial-messages",
             "--permission-mode", MODES.get(chat.get("mode"), "plan"),
         ]
+        for d in add_dirs:
+            args += ["--add-dir", d]
         if chat.get("model"):
             args += ["--model", chat["model"]]
         if instructions:
