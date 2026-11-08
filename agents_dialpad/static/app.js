@@ -388,6 +388,7 @@ const modelOptions = (p, selected) => (p ? p.models : []).map((m) =>
 async function openNewChat() {
   let info; try { info = await loadInfo(); } catch (e) { return handleErr(e); }
   const first = info.providers.find((p) => p.available);
+  const isClaude = (first && first.name === 'claude');
   const dlg = openSheet(`<form id="f-new"><h2>New chat</h2>
     <label for="n-prov">Agent</label>
     <select id="n-prov">${info.providers.map((p) => `<option value="${esc(p.name)}"${p.available ? '' : ' disabled'}>${esc(p.label)}${p.available ? '' : ' (not yet)'}</option>`).join('')}</select>
@@ -397,9 +398,21 @@ async function openNewChat() {
     <select id="n-proj">${info.projects.map((p) => `<option>${esc(p)}</option>`).join('')}</select>
     <label for="n-mode">Permissions</label>
     <select id="n-mode">${info.modes.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('')}</select>
-    <div class="actions"><button class="btn secondary" type="button" data-close>Cancel</button><button class="btn" type="submit" id="n-go">Start</button></div></form>`, 'New chat');
+    <div class="actions"><button class="btn secondary" type="button" data-close>Cancel</button><button class="btn" type="submit" id="n-go">Start</button></div>
+    <button class="btn secondary" type="button" id="btn-continue-desk" style="width: 100%; margin-top: 12px;" ${isClaude ? '' : 'hidden'}>Continue a desktop session</button>
+  </form>`, 'New chat');
   $('[data-close]', dlg).onclick = () => dlg.close();
-  $('#n-prov', dlg).onchange = () => { $('#n-model', dlg).innerHTML = modelOptions(info.providers.find((p) => p.name === $('#n-prov', dlg).value), ''); };
+  $('#n-prov', dlg).onchange = () => {
+    const prov = info.providers.find((p) => p.name === $('#n-prov', dlg).value);
+    $('#n-model', dlg).innerHTML = modelOptions(prov, '');
+    $('#btn-continue-desk', dlg).hidden = $('#n-prov', dlg).value !== 'claude';
+  };
+  $('#btn-continue-desk', dlg).onclick = () => {
+    const proj = $('#n-proj', dlg).value;
+    const mode = $('#n-mode', dlg).value;
+    dlg.close();
+    openContinueDesk(info, proj, mode);
+  };
   $('#f-new', dlg).onsubmit = async (e) => {
     e.preventDefault();
     const go = $('#n-go', dlg); go.setAttribute('aria-busy', 'true');
@@ -409,6 +422,68 @@ async function openNewChat() {
       dlg.close(); location.hash = '#/c/' + chat.id; refreshList();
     } catch (err) { go.removeAttribute('aria-busy'); handleErr(err); }
   };
+}
+
+async function openContinueDesk(info, initialProj, initialMode) {
+  const dlg = openSheet(`
+    <h2>Continue a desktop session</h2>
+    <label for="cd-proj">Project folder</label>
+    <select id="cd-proj">${info.projects.map((p) => `<option${p === initialProj ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select>
+    <label for="cd-mode">Permissions</label>
+    <select id="cd-mode">${info.modes.map((m) => `<option value="${esc(m.id)}"${m.id === initialMode ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}</select>
+    <label>Recent sessions</label>
+    <div class="desk-list" id="cd-list"><p class="lede">Loading…</p></div>
+    <div class="actions"><button class="btn secondary" type="button" data-close>Cancel</button></div>
+  `, 'Continue a desktop session');
+  $('[data-close]', dlg).onclick = () => dlg.close();
+
+  const projSel = $('#cd-proj', dlg);
+  const listEl = $('#cd-list', dlg);
+
+  async function loadSessions() {
+    listEl.innerHTML = '<p class="lede">Loading…</p>';
+    let sessions;
+    try {
+      sessions = await getJSON(`/projects/${encodeURIComponent(projSel.value)}/desk-sessions`);
+    } catch (e) {
+      return handleErr(e);
+    }
+    if (!sessions.length) {
+      listEl.innerHTML = '<p class="lede">No desktop sessions found for this folder.</p>';
+      return;
+    }
+    listEl.innerHTML = sessions.map((s) => `
+      <button class="desk-row" type="button" data-id="${esc(s.id)}">
+        <span class="desk-preview">${esc(s.preview)}</span>
+        <span class="desk-time">${esc(timeAgo(s.updated))}</span>
+      </button>
+    `).join('');
+
+    $$('.desk-row', listEl).forEach((btn) => {
+      btn.onclick = async () => {
+        btn.disabled = true;
+        try {
+          const chat = await getJSON('/chats/import', {
+            method: 'POST',
+            body: JSON.stringify({
+              project: projSel.value,
+              mode: $('#cd-mode', dlg).value,
+              session_id: btn.dataset.id,
+            }),
+          });
+          dlg.close();
+          location.hash = '#/c/' + chat.id;
+          refreshList();
+        } catch (err) {
+          btn.disabled = false;
+          handleErr(err);
+        }
+      };
+    });
+  }
+
+  projSel.onchange = loadSessions;
+  await loadSessions();
 }
 
 async function openModelPicker() {
@@ -540,6 +615,9 @@ function buildPane() {
       { icon: 'download', label: 'Export as Markdown', run: exportChat },
       { icon: 'diff', label: 'Changes', run: openChanges },
     ];
+    if (chat.provider === 'claude' && chat.session_id) {
+      items.push({ icon: 'term', label: 'Continue on the computer', run: openContinueDeskCmd });
+    }
     const qCmds = state.quick[chat.project] || [];
     if (qCmds.length) {
       items.push({ icon: 'term', label: 'Quick commands', run: openQuickCommands });
@@ -573,6 +651,31 @@ function updateHeader() {
 }
 
 function autosize() { const t = $('#input'); if (!t) return; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, window.innerHeight * 0.38) + 'px'; }
+
+function openContinueDeskCmd() {
+  if (!cur || !cur.chat) return;
+  const chat = cur.chat;
+  const os = (state.info && state.info.server_os) || 'windows';
+  const projPath = chat.project_path || chat.project;
+  let cmd = '';
+  if (os === 'windows') {
+    cmd = `cd /d "${projPath}" && claude --resume ${chat.session_id}`;
+  } else {
+    const escaped = projPath.replace(/'/g, "'\\''");
+    cmd = `cd '${escaped}' && claude --resume ${chat.session_id}`;
+  }
+  const dlg = openSheet(`
+    <h2>Continue on the computer</h2>
+    <p class="lede">Run this in a terminal on the computer. Close the chat here first so both don't write at once.</p>
+    <div class="code-box">
+      <pre><code>${esc(cmd)}</code></pre>
+      <button class="btn secondary" id="btn-copy-desk" type="button">Copy</button>
+    </div>
+    <div class="actions"><button class="btn secondary" type="button" data-close>Close</button></div>
+  `, 'Continue on the computer');
+  $('[data-close]', dlg).onclick = () => dlg.close();
+  $('#btn-copy-desk', dlg).onclick = () => copyText(cmd, $('#btn-copy-desk', dlg));
+}
 
 async function renameChat() {
   if (!cur) return;
@@ -904,7 +1007,11 @@ function msgHTML(m) {
 }
 function renderThread() {
   const t = $('#thread'); if (!t || !cur) return;
-  t.innerHTML = cur.chat.messages.map(msgHTML).join('') + '<div id="live"></div>';
+  let topNote = '';
+  if (cur.chat.imported && (!cur.chat.messages || cur.chat.messages.length === 0)) {
+    topNote = '<div class="thread-note">Continued from a session on the computer. Earlier messages stay there, but the agent remembers them.</div>';
+  }
+  t.innerHTML = topNote + cur.chat.messages.map(msgHTML).join('') + '<div id="live"></div>';
   renderLive();
 }
 function renderLive() {

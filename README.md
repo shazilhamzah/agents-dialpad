@@ -209,6 +209,13 @@ your first Claude message.
 - **Search:** Use the search bar above the chat list to search across titles, user messages and agent replies.
 - **Export:** Tap **More → Export as Markdown** to download the whole conversation as a clean `.md` file.
 
+## Continue between desk and phone
+
+Work started at your computer can be picked up on your phone, and vice-versa (Claude Code):
+
+- **Desk to phone:** When creating a new Claude chat, tap **Continue a desktop session** to pick from recent sessions in that project folder. The phone resumes that session (`claude --resume <id>`).
+- **Phone to desk:** In any Claude chat, tap **More → Continue on the computer** to copy the terminal command (`claude --resume <id>`) to run at your desk.
+
 ## Reviewing changes
 
 After an agent edits files, tap **More → Changes** in that chat to review what changed:

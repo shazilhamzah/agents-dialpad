@@ -6,6 +6,7 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 ## [Unreleased]
 
 ### Added
+- **Desktop sessions:** Continue recent Claude Code sessions from the computer on your phone, or copy the command to resume back at your desk.
 - **Change viewer:** Review git status and diffs from the phone (**More → Changes**) and revert uncommitted tracked changes.
 - **Push notifications:** Web Push notifications when a reply finishes, fails, or has blocked commands (requires optional extra gents-dialpad[push]).
 - **Quick commands:** One-tap owner-defined command buttons configured in `config.json` (`quick_commands`).

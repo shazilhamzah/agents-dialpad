@@ -73,7 +73,7 @@ Tips for the person supervising:
 - [x] A4 Quick commands
 - [x] B1 Push notifications
 - [x] B2 Change viewer
-- [ ] B3 Desktop sessions
+- [x] B3 Desktop sessions
 - [ ] B4 Uploads
 - [ ] B5 Device tokens
 - [ ] C1 Approvals (spike → Claude → Antigravity)

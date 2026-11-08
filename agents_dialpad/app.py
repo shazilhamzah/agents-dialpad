@@ -13,7 +13,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from pathlib import Path
-from . import config, export, gitview, pairing, push, quick
+import sys
+from . import config, desk, export, gitview, pairing, push, quick
 from .keepawake import KeepAwake
 from .providers import PLANNED, PROVIDERS
 from .runs import RunManager
@@ -56,6 +57,12 @@ class PushUnsubscribe(BaseModel):
 
 class RevertPath(BaseModel):
     path: str
+
+
+class ImportChat(BaseModel):
+    project: str
+    session_id: str = Field(pattern=r"^[0-9a-f-]{36}$")
+    mode: str = "readonly"
 
 
 def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: KeepAwake | None = None) -> FastAPI:
@@ -123,6 +130,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             "modes": modes(),
             "usage": runs.usage,
             "keep_awake": keep_awake.enabled,
+            "server_os": "windows" if sys.platform.startswith("win") else ("macos" if sys.platform == "darwin" else "linux"),
         }
 
     @api.get("/pair")
@@ -205,6 +213,36 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         for c in chats:
             c["running"] = runs.active(c["id"]) is not None
         return {"chats": chats, "usage": runs.usage}
+
+    @api.get("/projects/{project}/desk-sessions")
+    def get_desk_sessions(project: str):
+        if project not in cfg["projects"]:
+            raise HTTPException(404, "Unknown project")
+        project_path = cfg["projects"][project]
+        existing = store.list()
+        exclude_ids = {c["session_id"] for c in existing if c.get("session_id")}
+        return desk.list_sessions(project_path, exclude_ids=exclude_ids)
+
+    @api.post("/chats/import")
+    def import_chat(body: ImportChat):
+        if body.project not in cfg["projects"]:
+            raise HTTPException(400, "Unknown project")
+        if body.mode not in {m["id"] for m in modes()}:
+            raise HTTPException(400, "Unknown mode")
+        project_path = cfg["projects"][body.project]
+        if not desk.session_belongs_to(project_path, body.session_id):
+            raise HTTPException(404, "That desktop session was not found for this project")
+        chat = store.create("claude", body.project, body.mode, model="")
+        chat["session_id"] = body.session_id
+        chat["imported"] = True
+        sessions = desk.list_sessions(project_path, exclude_ids=set(), limit=100)
+        matching = next((s for s in sessions if s["id"] == body.session_id), None)
+        if matching and matching.get("preview"):
+            chat["title"] = matching["preview"][:48]
+        else:
+            chat["title"] = "Desktop session"
+        store.save(chat)
+        return chat
 
     @api.post("/chats")
     async def create_chat(body: NewChat):
@@ -333,6 +371,8 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         if run and chat["messages"] and chat["messages"][-1].get("run_id") == run.id:
             chat["messages"].pop()  # already saved but still streaming: the client replays it live
         chat["running"] = run is not None
+        if chat.get("project") in cfg["projects"]:
+            chat["project_path"] = str(Path(cfg["projects"][chat["project"]]).resolve())
         return chat
 
     @api.delete("/chats/{chat_id}")

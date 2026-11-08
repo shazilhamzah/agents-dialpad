@@ -618,3 +618,87 @@ def test_revert_is_refused_while_an_agent_runs_in_that_project(env, tmp_path):
         assert r2.status_code == 200
         assert r2.json() == {"ok": True}
         assert (ws / "hello.txt").read_text(encoding="utf-8") == "original\n"
+
+
+# --------------------------------------------------------------------------- desk sessions (B3)
+def test_import_creates_a_chat_that_resumes_the_session(env, calls, tmp_path, monkeypatch):
+    claude_dir = tmp_path / "claude_home"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_dir))
+    ws_dir = str(tmp_path / "ws")
+
+    sid = "77777777-7777-7777-7777-777777777777"
+    proj_folder = claude_dir / "projects" / "workspace"
+    proj_folder.mkdir(parents=True, exist_ok=True)
+    p = proj_folder / f"{sid}.jsonl"
+    p.write_text(
+        json.dumps({"type": "user", "cwd": ws_dir, "message": "My previous desk question"}) + "\n",
+        encoding="utf-8",
+    )
+
+    client, h = env()
+    with client:
+        # Check sessions list endpoint
+        sessions = client.get("/api/projects/workspace/desk-sessions", headers=h).json()
+        assert len(sessions) == 1
+        assert sessions[0]["id"] == sid
+        assert sessions[0]["preview"] == "My previous desk question"
+
+        # Import
+        r = client.post(
+            "/api/chats/import",
+            headers=h,
+            json={"project": "workspace", "session_id": sid, "mode": "readonly"},
+        )
+        assert r.status_code == 200
+        chat = r.json()
+        assert chat["session_id"] == sid
+        assert chat["imported"] is True
+        assert chat["title"] == "My previous desk question"
+
+        # Now send a message in this imported chat: fake claude gets --resume <id>
+        turn(client, h, chat["id"], "what was the word?")
+        wait_until_idle(client, h, chat["id"])
+
+        last_call = calls()[-1]
+        assert "--resume" in last_call["argv"]
+        assert last_call["argv"][last_call["argv"].index("--resume") + 1] == sid
+
+
+def test_import_rejects_unknown_or_foreign_sessions(env, tmp_path, monkeypatch):
+    claude_dir = tmp_path / "claude_home"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_dir))
+
+    client, h = env()
+    with client:
+        # Unknown session id (belongs_to is False)
+        sid = "88888888-8888-8888-8888-888888888888"
+        r = client.post(
+            "/api/chats/import",
+            headers=h,
+            json={"project": "workspace", "session_id": sid, "mode": "readonly"},
+        )
+        assert r.status_code == 404
+        assert "That desktop session was not found" in r.text
+
+        # Unknown project
+        r = client.post(
+            "/api/chats/import",
+            headers=h,
+            json={"project": "unknown_proj", "session_id": sid, "mode": "readonly"},
+        )
+        assert r.status_code == 400
+
+        # Invalid mode
+        r = client.post(
+            "/api/chats/import",
+            headers=h,
+            json={"project": "workspace", "session_id": sid, "mode": "invalid_mode"},
+        )
+        assert r.status_code == 400
+
+
+def test_desk_sessions_need_the_token(env):
+    client, _ = env()
+    with client:
+        assert client.get("/api/projects/workspace/desk-sessions").status_code == 401
+        assert client.post("/api/chats/import", json={"project": "workspace", "session_id": "00000000-0000-0000-0000-000000000000"}).status_code == 401
