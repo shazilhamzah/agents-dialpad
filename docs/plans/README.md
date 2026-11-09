@@ -22,8 +22,13 @@ one at a time without needing to understand the whole project first.
 | [C2](C2-codex.md) | Codex as a third agent | M–L | none | Use Codex the same way |
 | [C3](C3-usage-and-alerts.md) | Usage history and limit alerts | M | B1 | See usage per day; warned before hitting a limit |
 | [C4](C4-scheduled-prompts.md) | Scheduled prompts | M | B1 | "Every morning at 8, summarise yesterday's commits" |
-| [C5](C5-compare-agents.md) | Ask two agents at once | M–L | A3 | Same question to Claude and Antigravity, side by side |
+| [C5](C5-compare-agents.md) | ~~Ask two agents at once~~ (removed by D1) | M–L | A3 | |
 | [C6](C6-small-extras.md) | Per-project instructions | S | none | Different house rules per project |
+| [D1](D1-remove-compare.md) | Remove the compare view | S–M | PR #5 merged | A simpler chat screen |
+| [D2](D2-full-command-in-approvals.md) | Full command on approval cards | S | none | See exactly what you are allowing (and Antigravity cards stop being blank) |
+| [D3](D3-codex-without-a-plan.md) | Codex readiness, friendly errors, default model | M | none | Codex greyed out with a hint instead of failing with raw JSON |
+| [D4](D4-lock-screen-approvals.md) | Allow / Deny from the notification | M | D2 | Decide without opening the app (Android, desktop); iPhone jumps to the card |
+| [D5](D5-app-lock.md) | App lock with Face ID / fingerprint | L | B5 | Someone holding your unlocked phone can't use your agents |
 
 Sizes: **S** under a day, **M** a few days, **L** a week or more, for an experienced developer.
 
@@ -33,6 +38,9 @@ Sizes: **S** under a day, **M** a few days, **L** a week or more, for an experie
    that later tasks rely on, so do it before anything in phase B.
 2. **B1 → B2 → B3 → B4 → B5** (Phase B).
 3. **C1** needs a short research spike first (its plan says exactly what to check). Then C2, C3, C4, C5, C6 in any order.
+4. **D1 → D2 → D3 → D4 → D5** (Phase D). D1 first because it shrinks the chat screen code the others touch. D2 before D4
+   (the notification shows the command D2 normalises). D3 is independent. D5 needs its spike first, and fills in D4's
+   "no notification buttons on locked phones" rule.
 
 Dependencies that matter:
 - **A2** creates the sidebar "More" menu and makes the menu code work for more than one button. B1, B5 and C3 add items to it.
@@ -63,7 +71,7 @@ Tips for the person supervising:
 - Give the assistant one task at a time and review the PR before the next one.
 - If the assistant reports that a "Verify first" check failed, that is a success: it avoided building on a wrong assumption.
   Update the task file with what was found before continuing.
-- Large tasks (C1, C5) are split into numbered parts. You can hand over one part at a time.
+- Large tasks (C1, D5) are split into numbered parts. You can hand over one part at a time.
 
 ## Progress
 
@@ -76,9 +84,14 @@ Tips for the person supervising:
 - [x] B3 Desktop sessions
 - [x] B4 Uploads
 - [x] B5 Device tokens
-- [ ] C1 Approvals (spike → Claude → Antigravity)
+- [x] C1 Approvals (spike → Claude → Antigravity)
 - [x] C2 Codex
 - [x] C3 Usage and alerts
 - [x] C4 Scheduled prompts
-- [x] C5 Compare agents
+- [x] C5 Compare agents (to be removed by D1)
 - [x] C6 Per-project instructions
+- [ ] D1 Remove compare
+- [ ] D2 Full command on approval cards
+- [ ] D3 Codex readiness
+- [ ] D4 Allow / Deny from the notification
+- [ ] D5 App lock (spike → feature)
