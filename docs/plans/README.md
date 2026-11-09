@@ -92,6 +92,6 @@ Tips for the person supervising:
 - [x] C6 Per-project instructions
 - [x] D1 Remove compare
 - [x] D2 Full command on approval cards
-- [ ] D3 Codex readiness
+- [x] D3 Codex readiness
 - [ ] D4 Allow / Deny from the notification
 - [ ] D5 App lock (spike → feature)

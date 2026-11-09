@@ -267,19 +267,38 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
                 return [m for m in all_m if m["id"] != "ask"]
             return all_m
 
-        providers = [
-            {
+        disabled = set(cfg.get("disabled_agents", []))
+        providers = []
+        for p in PROVIDERS.values():
+            if p.name in disabled:
+                continue
+            st = await p.status() if hasattr(p, "status") else {"state": "ready" if p.available() else "not_installed", "note": ""}
+            state_val = st.get("state", "unknown")
+            is_avail = (state_val != "not_installed")
+            models_list = await p.models() if is_avail else []
+            providers.append({
                 "name": p.name,
                 "label": p.label,
-                "available": p.available(),
-                "models": await p.models() if p.available() else [],
+                "available": is_avail,
+                "status": st,
+                "note": st.get("note", ""),
+                "models": models_list,
                 "modes": provider_modes(p),
-            }
-            for p in PROVIDERS.values()
-        ]
+            })
         valid_scheds, _ = schedules.normalize(cfg.get("schedules", []), cfg)
         return {
-            "providers": providers + [{**p, "available": False, "models": [], "modes": [m for m in modes() if m["id"] != "ask"]} for p in PLANNED],
+            "providers": providers + [
+                {
+                    **p,
+                    "available": False,
+                    "status": {"state": "not_installed", "note": "not yet"},
+                    "note": "not yet",
+                    "models": [],
+                    "modes": [m for m in modes() if m["id"] != "ask"],
+                }
+                for p in PLANNED
+                if p["name"] not in disabled
+            ],
             "projects": list(cfg["projects"]),
             "modes": modes(),
             "usage": runs.usage,
@@ -287,6 +306,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             "server_os": "windows" if sys.platform.startswith("win") else ("macos" if sys.platform == "darwin" else "linux"),
             "me": who,
             "has_schedules": len(valid_scheds) > 0,
+            "disabled_agents": list(cfg.get("disabled_agents", [])),
         }
 
     @api.get("/pair")
@@ -425,9 +445,15 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
 
     @api.post("/chats")
     async def create_chat(body: NewChat):
+        if body.provider in set(cfg.get("disabled_agents", [])):
+            raise HTTPException(400, "This agent is turned off in config.json")
         prov = PROVIDERS.get(body.provider)
         if not prov or not prov.available():
             raise HTTPException(400, f"Provider '{body.provider}' is not available")
+        if hasattr(prov, "status"):
+            st = await prov.status()
+            if st.get("state") == "not_signed_in":
+                raise HTTPException(400, "Codex isn't signed in on the computer. Run `codex login` there, then try again.")
         if body.project not in cfg["projects"]:
             raise HTTPException(400, "Unknown project")
         if body.mode not in {m["id"] for m in modes()}:
@@ -607,6 +633,8 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
     @api.post("/chats/{chat_id}/messages", status_code=202)
     async def send_message(chat_id: str, body: NewMessage):  # async: must run on the event loop
         chat = chat_or_404(chat_id)
+        if chat.get("provider") in set(cfg.get("disabled_agents", [])):
+            raise HTTPException(400, "This agent is turned off in config.json")
         if runs.active(chat_id):
             raise HTTPException(409, "This chat is already running")
         text = body.text

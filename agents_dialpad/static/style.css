@@ -225,6 +225,8 @@ svg.i { width: 1.25rem; height: 1.25rem; flex: none; fill: none; stroke: current
 .foot.warn svg.i { width: 1rem; height: 1rem; margin-top: 2px; }
 .errbox { display: flex; gap: 8px; align-items: flex-start; color: var(--danger); font-size: .9375rem; margin-top: .5em; }
 .errbox svg.i { width: 1.1rem; height: 1.1rem; margin-top: 2px; }
+.err-actions { margin-top: 8px; }
+.disabled-msg { padding: 12px 16px; margin: 0; color: var(--text-3); text-align: center; font-size: .9375rem; }
 
 .jump { position: absolute; right: max(var(--gutter), 12px); bottom: 12px; box-shadow: var(--shadow); background: var(--surface); border: 1px solid var(--line); color: var(--text); }
 .jump[hidden] { display: none; }

@@ -12,6 +12,23 @@ import sys
 import time
 
 args = sys.argv[1:]
+
+if "login" in args and "status" in args:
+    login_state = os.environ.get("FAKE_CODEX_LOGIN", "signed_in")
+    if os.environ.get("FAKE_LOG"):
+        with open(os.environ["FAKE_LOG"], "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"agent": "codex", "argv": args, "login": login_state}) + "\n")
+    if login_state == "signed_out":
+        sys.stdout.write("Not logged in\n")
+        sys.exit(1)
+    else:
+        sys.stdout.write("Logged in using ChatGPT\n")
+        sys.exit(0)
+
+if "--version" in args:
+    sys.stdout.write("codex-cli 0.164.0\n")
+    sys.exit(0)
+
 prompt = sys.stdin.buffer.read().decode("utf-8")
 
 
@@ -33,6 +50,20 @@ session_id = args[args.index("resume") + 1] if is_resume and args.index("resume"
 
 out({"type": "thread.started", "thread_id": session_id})
 out({"type": "turn.started"})
+
+if "MODEL_NOT_ALLOWED" in prompt:
+    err_json = json.dumps({
+        "type": "error",
+        "status": 400,
+        "error": {
+            "type": "invalid_request_error",
+            "message": "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+            "code": "model_not_found",
+        },
+    })
+    out({"type": "error", "message": err_json})
+    out({"type": "turn.failed", "error": {"message": err_json}})
+    sys.exit(1)
 
 if "SLOW" in prompt:
     for i in range(300):

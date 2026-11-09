@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ APP_NAME = "agents-dialpad"
 PKG = Path(__file__).resolve().parent          # the installed package (holds static/ and instructions/)
 ROOT = PKG.parent                              # the repo root, when running from a git checkout
 MIN_TOKEN_LEN = 16
+MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-\[\]/]{0,100}$")
 
 
 def is_source_checkout() -> bool:
@@ -126,6 +128,26 @@ def load() -> tuple[dict, str]:
     cfg["quick_commands"], cfg["_quick_problems"] = quick.normalize(cfg.get("quick_commands"))
     # Extra models to offer for Codex (empty by default: offers "Default").
     cfg.setdefault("codex_models", [])
+    cfg.setdefault("codex_default_model", "")
+    if not isinstance(cfg["codex_default_model"], str) or (cfg["codex_default_model"] and not MODEL_RE.match(cfg["codex_default_model"])):
+        cfg["codex_default_model"] = ""
+
+    cfg.setdefault("disabled_agents", [])
+    if not isinstance(cfg["disabled_agents"], list):
+        cfg["disabled_agents"] = []
+    from .providers import PROVIDERS, PLANNED
+    known_agents = set(PROVIDERS.keys()) | {p["name"] for p in PLANNED}
+    valid_disabled = []
+    unknown_disabled = []
+    for a in cfg["disabled_agents"]:
+        if isinstance(a, str):
+            if a in known_agents:
+                valid_disabled.append(a)
+            else:
+                unknown_disabled.append(a)
+    cfg["disabled_agents"] = valid_disabled
+    cfg["_unknown_disabled_agents"] = unknown_disabled
+
     # Threshold for low-subscription alerts (percentage). 0 disables.
     cfg.setdefault("limit_alert_percent", 20)
     # Scheduled prompts to run at specific times (empty by default).

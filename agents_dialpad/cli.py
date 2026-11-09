@@ -240,7 +240,7 @@ def cmd_pair(args) -> int:
 def cmd_doctor(args) -> int:
     from .doctor import run_checks
 
-    marks = {"ok": "ok  ", "warn": "warn", "fail": "FAIL"}
+    marks = {"ok": "ok  ", "warn": "warn", "fail": "FAIL", "info": "info"}
     worst = "ok"
     for c in run_checks():
         print(f"[{marks[c.level]}] {c.label}" + (f": {c.detail}" if c.detail else ""))

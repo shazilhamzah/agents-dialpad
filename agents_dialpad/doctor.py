@@ -39,13 +39,49 @@ def _agent(label: str, env: str, default: str, install_hint: str) -> Check:
     return Check("ok", label, f"{version or 'found'}  ({exe})", "Make sure you are logged in: run it once in a terminal.")
 
 
-def agent_checks() -> list[Check]:
-    checks = [
-        _agent("Claude Code (claude)", "AG_CLAUDE", "claude", "Install Claude Code and log in: https://claude.com/claude-code"),
-        _agent("Antigravity (agy)", "AG_AGY", "agy", "Install Antigravity's CLI and log in."),
-        _agent("Codex (codex)", "AG_CODEX", "codex", "Install Codex CLI and log in: https://github.com/openai/codex"),
-    ]
-    if all(c.level != "ok" for c in checks):
+def _codex_check(label: str = "Codex (codex)") -> Check:
+    exe = shutil.which(os.environ.get("AG_CODEX", "codex"))
+    if not exe:
+        return Check("warn", label, "not found on PATH", "Install Codex CLI and log in: https://github.com/openai/codex")
+    from .providers.codex import extra_args
+    cmd = [exe, *extra_args("AG_CODEX_ARGS"), "login", "status"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        text = (res.stdout or res.stderr or "").strip()
+        if res.returncode == 0 and "logged in" in text.lower() and "not logged in" not in text.lower():
+            first_line = text.splitlines()[0] if text else ""
+            account = first_line.removeprefix("Logged in using ").strip() if first_line.startswith("Logged in using ") else "ChatGPT"
+            return Check("ok", label, f"signed in ({account})")
+        return Check("warn", label, "not signed in", "Run `codex login` in a terminal.")
+    except (OSError, subprocess.TimeoutExpired):
+        return Check("warn", label, "status unknown", "Could not check login status.")
+
+
+def agent_checks(cfg: dict | None = None) -> list[Check]:
+    if cfg is None:
+        try:
+            cfg, _ = config.load()
+        except Exception:
+            cfg = {}
+    disabled = set(cfg.get("disabled_agents", []))
+    checks = []
+
+    if "claude" in disabled:
+        checks.append(Check("info", "Claude Code (claude)", "turned off in config.json"))
+    else:
+        checks.append(_agent("Claude Code (claude)", "AG_CLAUDE", "claude", "Install Claude Code and log in: https://claude.com/claude-code"))
+
+    if "antigravity" in disabled:
+        checks.append(Check("info", "Antigravity (agy)", "turned off in config.json"))
+    else:
+        checks.append(_agent("Antigravity (agy)", "AG_AGY", "agy", "Install Antigravity's CLI and log in."))
+
+    if "codex" in disabled:
+        checks.append(Check("info", "Codex (codex)", "turned off in config.json"))
+    else:
+        checks.append(_codex_check("Codex (codex)"))
+
+    if all(c.level not in ("ok", "info") for c in checks):
         checks.append(Check("fail", "At least one agent CLI is required", "", "Install and log in to Claude Code, Antigravity, or Codex."))
     return checks
 
@@ -136,7 +172,9 @@ def run_checks() -> list[Check]:
         _, problems = schedules.normalize(cfg["schedules"], cfg)
         for prob in problems:
             checks.append(Check("warn", "Schedule", prob, "Check schedules in config.json."))
-    checks.extend(agent_checks())
+    for unk in cfg.get("_unknown_disabled_agents", []):
+        checks.append(Check("warn", "Disabled agent", f"unknown agent '{unk}'", "Check disabled_agents in config.json."))
+    checks.extend(agent_checks(cfg))
     checks.append(server_check(cfg["host"], cfg["port"]))
     checks.extend(tailscale_checks(cfg["port"]))
     return checks

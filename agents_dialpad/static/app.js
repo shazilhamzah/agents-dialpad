@@ -519,14 +519,31 @@ const modelOptions = (p, selected) => (p ? p.models : []).map((m) =>
 /* ===================== sheets: new chat, model, limits ===================== */
 async function openNewChat() {
   let info; try { info = await loadInfo(); } catch (e) { return handleErr(e); }
-  const avail = info.providers.filter((p) => p.available);
-  const first = avail[0] || info.providers[0];
+  const isUsable = (p) => p.available && (!p.status || p.status.state === 'ready' || p.status.state === 'unknown');
+  const usable = info.providers.filter(isUsable);
+  const first = usable[0] || info.providers[0];
   const isClaude = (first && first.name === 'claude');
   const firstModes = (first && first.modes) ? first.modes : info.modes;
-  const provOptions = info.providers.map((p) => `<option value="${esc(p.name)}"${p.available ? '' : ' disabled'}>${esc(p.label)}${p.available ? '' : ' (not yet)'}</option>`).join('');
+  const provOptions = info.providers.map((p) => {
+    let disabled = false;
+    let suffix = '';
+    const st = p.status ? p.status.state : (p.available ? 'ready' : 'not_installed');
+    if (st === 'not_signed_in') {
+      disabled = true;
+      suffix = ' (sign in on the computer)';
+    } else if (st === 'not_installed' || !p.available) {
+      disabled = true;
+      suffix = ' (not installed)';
+    }
+    const isSelected = first && p.name === first.name;
+    return `<option value="${esc(p.name)}"${disabled ? ' disabled' : ''}${isSelected ? ' selected' : ''}>${esc(p.label)}${suffix}</option>`;
+  }).join('');
+  const signedOut = info.providers.find((p) => p.status && p.status.state === 'not_signed_in');
+  const provNote = signedOut ? `<p class="note" id="n-prov-note">${esc(signedOut.note || `${signedOut.label} isn't signed in on the computer.`)}</p>` : '';
   const dlg = openSheet(`<form id="f-new"><h2>New chat</h2>
     <label for="n-prov">Agent</label>
     <select id="n-prov">${provOptions}</select>
+    ${provNote}
     <label for="n-model" id="lbl-model">Model</label>
     <select id="n-model">${modelOptions(first, '')}</select>
     <label for="n-proj">Project folder</label>
@@ -989,6 +1006,22 @@ async function openChat(id) {
 }
 
 function buildPane(chat) {
+  const disabledAgents = (state.info && state.info.disabled_agents) || [];
+  const isDisabled = disabledAgents.includes(chat.provider);
+  const composerHtml = isDisabled
+    ? `<div class="composer-in"><p class="disabled-msg">${esc(providerLabel(chat.provider))} is turned off in config.json</p></div>`
+    : `<div class="composer-in">
+      <div id="attachments" class="attachments-row" hidden></div>
+      <div class="meta-row"><button class="chip" id="btn-model" type="button" aria-label="Change model"><span id="model-label"></span>${icon('chev')}</button></div>
+      <div class="row">
+        <input type="file" id="file-input" multiple accept="image/*,.pdf,.txt,.md,.csv,.json,.log,.yaml,.yml,.xml,.html,.css,.js,.ts,.py" hidden>
+        <button class="icon-btn clip-btn" id="btn-clip" type="button" aria-label="Attach files">${icon('clip')}</button>
+        <div class="field"><label class="sr" for="input">Message</label>
+          <textarea id="input" rows="1" placeholder="Message" enterkeyhint="send"></textarea></div>
+        <button class="send" id="send" type="submit" aria-label="Send">${icon('up')}</button>
+      </div>
+    </div>`;
+
   $('#pane').innerHTML = `
     <header class="bar">
       <a class="icon-btn back" href="#/" aria-label="Back to chats">${icon('back')}</a>
@@ -1000,17 +1033,7 @@ function buildPane(chat) {
       <button class="icon-btn jump" id="jump" type="button" aria-label="Scroll to latest message" hidden>${icon('down')}</button>
     </div>
     <div class="sr" id="sr" role="status"></div>
-    <form class="composer" id="composer" autocomplete="off"><div class="composer-in">
-      <div id="attachments" class="attachments-row" hidden></div>
-      <div class="meta-row"><button class="chip" id="btn-model" type="button" aria-label="Change model"><span id="model-label"></span>${icon('chev')}</button></div>
-      <div class="row">
-        <input type="file" id="file-input" multiple accept="image/*,.pdf,.txt,.md,.csv,.json,.log,.yaml,.yml,.xml,.html,.css,.js,.ts,.py" hidden>
-        <button class="icon-btn clip-btn" id="btn-clip" type="button" aria-label="Attach files">${icon('clip')}</button>
-        <div class="field"><label class="sr" for="input">Message</label>
-          <textarea id="input" rows="1" placeholder="Message" enterkeyhint="send"></textarea></div>
-        <button class="send" id="send" type="submit" aria-label="Send">${icon('up')}</button>
-      </div>
-    </div></form>`;
+    <form class="composer" id="composer" autocomplete="off">${composerHtml}</form>`;
   updateHeader(chat);
 
   function updateSendBtn() {
@@ -1058,44 +1081,48 @@ function buildPane(chat) {
   }
 
   const fileInput = $('#file-input');
-  $('#btn-clip').onclick = () => fileInput.click();
-  fileInput.onchange = async () => {
-    const files = Array.from(fileInput.files || []);
-    fileInput.value = '';
-    if (!files.length) return;
-    if ((cur.pending.length + files.length) > 10) {
-      return toast('Maximum 10 attachments per message');
-    }
-    for (const file of files) {
-      const isImg = file.type.startsWith('image/');
-      const item = {
-        name: '',
-        label: file.name,
-        url: isImg ? URL.createObjectURL(file) : null,
-        loading: true,
-      };
-      cur.pending.push(item);
-      renderAttachments();
-      cur.uploading = (cur.uploading || 0) + 1;
-      updateSendBtn();
-      try {
-        const res = await uploadFile(cur.chat.id, file);
-        item.name = res.name;
-        item.loading = false;
-      } catch (e) {
-        if (item.url) URL.revokeObjectURL(item.url);
-        cur.pending = cur.pending.filter((x) => x !== item);
-        handleErr(e);
-      } finally {
-        cur.uploading = Math.max(0, (cur.uploading || 1) - 1);
-        updateSendBtn();
-        renderAttachments();
+  if ($('#btn-clip') && fileInput) {
+    $('#btn-clip').onclick = () => fileInput.click();
+  }
+  if (fileInput) {
+    fileInput.onchange = async () => {
+      const files = Array.from(fileInput.files || []);
+      fileInput.value = '';
+      if (!files.length) return;
+      if ((cur.pending.length + files.length) > 10) {
+        return toast('Maximum 10 attachments per message');
       }
-    }
-  };
+      for (const file of files) {
+        const isImg = file.type.startsWith('image/');
+        const item = {
+          name: '',
+          label: file.name,
+          url: isImg ? URL.createObjectURL(file) : null,
+          loading: true,
+        };
+        cur.pending.push(item);
+        renderAttachments();
+        cur.uploading = (cur.uploading || 0) + 1;
+        updateSendBtn();
+        try {
+          const res = await uploadFile(cur.chat.id, file);
+          item.name = res.name;
+          item.loading = false;
+        } catch (e) {
+          if (item.url) URL.revokeObjectURL(item.url);
+          cur.pending = cur.pending.filter((x) => x !== item);
+          handleErr(e);
+        } finally {
+          cur.uploading = Math.max(0, (cur.uploading || 1) - 1);
+          updateSendBtn();
+          renderAttachments();
+        }
+      }
+    };
+  }
 
   const input = $('#input');
-  $('#btn-model').onclick = openModelPicker;
+  if ($('#btn-model')) $('#btn-model').onclick = openModelPicker;
   $('#btn-more').onclick = (e) => {
     if ($('#menu')) return closeMenu();
     const items = [
@@ -1118,15 +1145,24 @@ function buildPane(chat) {
     openMenu(e.currentTarget, items);
   };
 
-  input.value = state.drafts[chat.id] || '';
-  $('.field').addEventListener('click', (e) => { if (e.target === e.currentTarget) input.focus(); });
-  input.addEventListener('input', autosize);
-  input.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || e.isComposing) return;
-    const send = e.ctrlKey || e.metaKey || (!e.shiftKey && matchMedia('(pointer: fine)').matches);
-    if (send) { e.preventDefault(); if (cur && !cur.live) sendMessage(cur); }
-  });
-  $('#composer').onsubmit = (e) => { e.preventDefault(); if (cur && cur.live) cur.stop(); else sendMessage(cur); };
+  if (input) {
+    input.value = state.drafts[chat.id] || '';
+    const field = $('.field');
+    if (field) field.addEventListener('click', (e) => { if (e.target === e.currentTarget) input.focus(); });
+    input.addEventListener('input', autosize);
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.isComposing) return;
+      const send = e.ctrlKey || e.metaKey || (!e.shiftKey && matchMedia('(pointer: fine)').matches);
+      if (send) { e.preventDefault(); if (cur && !cur.live) sendMessage(cur); }
+    });
+    autosize();
+  }
+  $('#composer').onsubmit = (e) => {
+    e.preventDefault();
+    if (isDisabled) return;
+    if (cur && cur.live) cur.stop();
+    else sendMessage(cur);
+  };
   autosize();
 }
 
@@ -1482,14 +1518,19 @@ function assistantHTML(events, live) {
       if (ev.duration_ms) bits.push((ev.duration_ms / 1000).toFixed(1) + 's');
       foot = bits.join(' · ');
       denials = [...new Set(ev.denials || [])];
-      if (ev.is_error && ev.result) blocks.push({ kind: 'error', text: ev.result });
+      if (ev.is_error && ev.result) blocks.push({ kind: 'error', text: ev.result, action: ev.action });
     } else if (ev.type === 'error') {
-      blocks.push({ kind: 'error', text: ev.message });
+      blocks.push({ kind: 'error', text: ev.message, action: ev.action });
     }
   }
   let html = blocks.map((b) => {
     if (b.kind === 'text') return Markdown.render(b.text);
-    if (b.kind === 'error') return `<div class="errbox">${icon('warn')}<span>${esc(b.text)}</span></div>`;
+    if (b.kind === 'error') {
+      const actionHtml = b.action === 'change_model'
+        ? `<div class="err-actions"><button class="btn secondary sm" type="button" data-action="change_model">Change model</button></div>`
+        : '';
+      return `<div class="errbox">${icon('warn')}<div><span>${esc(b.text)}</span>${actionHtml}</div></div>`;
+    }
     if (b.kind === 'approval') {
       let statusHtml = '';
       if (!b.result) {
@@ -1711,6 +1752,13 @@ document.addEventListener('click', async (e) => {
     allBtns.forEach((btn) => { btn.disabled = false; });
     toast(err.message || 'Approval failed');
   }
+});
+
+/* ---- action buttons (e.g. Change model) ---- */
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-action="change_model"]');
+  if (!b) return;
+  openModelPicker();
 });
 
 /* ---- tool collapse state ---- */
