@@ -151,6 +151,7 @@ def load() -> tuple[dict, str]:
 
     # Threshold for low-subscription alerts (percentage). 0 disables.
     cfg.setdefault("limit_alert_percent", 20)
+    cfg.setdefault("app_lock_idle_minutes", 5)
     # Scheduled prompts to run at specific times (empty by default).
     cfg.setdefault("schedules", [])
 

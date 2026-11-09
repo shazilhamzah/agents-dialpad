@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import secrets
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -17,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from pathlib import Path
 import sys
-from . import config, desk, devices, export, gitview, pairing, push, quick, schedules, uploads
+from . import applock, config, desk, devices, export, gitview, pairing, push, quick, schedules, uploads
 from .keepawake import KeepAwake
 from .providers import PLANNED, PROVIDERS
 from .runs import RunManager
@@ -87,6 +88,11 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
     devs = devices.Devices(config.DATA / "devices.json")
     # A phone that subscribed with a device token stops getting pushes once that device is revoked (UI or CLI).
     subs = push.Subscriptions(config.DATA / "push.json", keep=lambda s: not s.get("device") or devs.known(s["device"]))
+    idle_mins = float(cfg.get("app_lock_idle_minutes", 5))
+    lock_store = applock.LockStore(config.DATA / "lock.json")
+    lock_sessions = applock.Sessions(idle_seconds=idle_mins * 60)
+    lock_limiter = applock.RateLimiter()
+    pending_challenges: dict[str, dict] = {}
 
     async def notify(chat_id: str, run):
         if not subs.all():
@@ -257,15 +263,29 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         """'Full access' only exists when `"allow_full_access": true` is set in config.json."""
         return BASE_MODES + ([FULL_MODE] if cfg.get("allow_full_access") else [])
 
-    def identity(authorization: str | None = Header(default=None)) -> str:
+    def identity(
+        request: Request,
+        authorization: str | None = Header(default=None),
+        x_unlock: str | None = Header(default=None, alias="X-Unlock"),
+    ) -> str:
         supplied = authorization[7:] if authorization and authorization.startswith("Bearer ") else ""
         if supplied and secrets.compare_digest(supplied.encode(), token.encode()):
-            return "owner"
-        dev = devs.match(supplied) if supplied else None
-        if dev:
-            devs.touch(dev)
-            return dev
-        raise HTTPException(401, "Invalid or missing token")
+            who = "owner"
+        else:
+            dev = devs.match(supplied) if supplied else None
+            if dev:
+                devs.touch(dev)
+                who = dev
+            else:
+                raise HTTPException(401, "Invalid or missing token")
+
+        path = request.url.path
+        if lock_store.has_lock(who):
+            if path.rstrip("/") != "/api/info" and not path.startswith("/api/lock"):
+                if not x_unlock or not lock_sessions.check(x_unlock, who):
+                    raise HTTPException(423, "locked")
+
+        return who
 
     def owner_only(who: str = Depends(identity)) -> str:
         if who != "owner":
@@ -584,6 +604,267 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         if not devs.revoke(device_id):
             raise HTTPException(404, "Device not found")
         subs.remove_device(device_id)
+        lock_store.reset(device_id)
+        lock_sessions.drop_all(device_id)
+        return {"ok": True}
+
+    @api.get("/lock/status")
+    def lock_status(request: Request, who: str = Depends(identity)):
+        host = request.url.hostname or "localhost"
+        is_secure = request.url.scheme == "https" or host in ("localhost", "127.0.0.1")
+        hint = "" if is_secure else "App lock needs the HTTPS address (Tailscale). Open the app from there."
+        return {
+            "enabled": lock_store.has_lock(who),
+            "available": applock.WEBAUTHN_AVAILABLE,
+            "secure_context_hint": hint,
+            "credentials": [
+                {
+                    "id": c["credential_id"],
+                    "name": c.get("name", "Passkey"),
+                    "created": c.get("created", 0),
+                }
+                for c in lock_store.list(who)
+            ],
+            "rp_id": host,
+            "idle_minutes": int(cfg.get("app_lock_idle_minutes", 5)),
+        }
+
+    @api.post("/lock/register/options")
+    async def lock_register_options(request: Request, who: str = Depends(identity)):
+        if not applock.WEBAUTHN_AVAILABLE:
+            raise HTTPException(503, "WebAuthn extra not installed")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        rp_id = body.get("rp_id") or request.url.hostname or "localhost"
+        exclude_creds = [
+            applock.PublicKeyCredentialDescriptor(id=applock.b64url_decode(c["credential_id"]))
+            for c in lock_store.list(who)
+        ]
+        opts = applock.generate_registration_options(
+            rp_name="agents-dialpad",
+            rp_id=rp_id,
+            user_id=hashlib.sha256(who.encode("utf-8")).digest(),
+            user_name=who,
+            user_display_name=who,
+            authenticator_selection=applock.AuthenticatorSelectionCriteria(
+                authenticator_attachment=applock.AuthenticatorAttachment.PLATFORM,
+                resident_key=applock.ResidentKeyRequirement.PREFERRED,
+                user_verification=applock.UserVerificationRequirement.REQUIRED,
+            ),
+            exclude_credentials=exclude_creds or None,
+        )
+        chal_id = secrets.token_urlsafe(16)
+        now = time.time()
+        for k in list(pending_challenges.keys()):
+            if pending_challenges[k].get("expires_at", 0) < now:
+                pending_challenges.pop(k, None)
+        pending_challenges[chal_id] = {
+            "challenge": opts.challenge,
+            "who": who,
+            "rp_id": rp_id,
+            "name": body.get("name") or "Passkey",
+            "type": "register",
+            "expires_at": now + 120,
+        }
+        raw = json.loads(applock.options_to_json(opts))
+        raw["challenge_id"] = chal_id
+        return raw
+
+    @api.post("/lock/register/verify")
+    async def lock_register_verify(request: Request, who: str = Depends(identity)):
+        if not applock.WEBAUTHN_AVAILABLE:
+            raise HTTPException(503, "WebAuthn extra not installed")
+        body = await request.json()
+        chal_id = body.get("challenge_id")
+        chal = None
+        if chal_id and chal_id in pending_challenges:
+            cand = pending_challenges[chal_id]
+            if cand.get("who") == who and cand.get("type") == "register":
+                chal = pending_challenges.pop(chal_id)
+        if not chal:
+            cred_dict = body.get("credential") if "credential" in body else body
+            resp = cred_dict.get("response") or {}
+            cd_b64 = resp.get("clientDataJSON")
+            if cd_b64:
+                try:
+                    cd = json.loads(applock.b64url_decode(cd_b64).decode("utf-8"))
+                    c_b64 = cd.get("challenge", "")
+                    c_bytes = applock.b64url_decode(c_b64)
+                    for k, v in list(pending_challenges.items()):
+                        if v.get("who") == who and v.get("type") == "register" and v.get("challenge") == c_bytes:
+                            chal = pending_challenges.pop(k)
+                            break
+                except Exception:
+                    pass
+        if not chal:
+            raise HTTPException(400, "Challenge expired or invalid")
+        if time.time() > chal.get("expires_at", 0):
+            raise HTTPException(400, "Challenge expired")
+
+        cred_dict = body.get("credential") if "credential" in body else body
+        origins = applock.get_allowed_origins(
+            host=request.url.hostname or "localhost",
+            scheme=request.url.scheme,
+            port=request.url.port,
+            cfg=cfg,
+        )
+        try:
+            ver = applock.verify_registration_response(
+                credential=cred_dict,
+                expected_challenge=chal["challenge"],
+                expected_origin=origins,
+                expected_rp_id=chal["rp_id"],
+                require_user_verification=True,
+            )
+        except Exception as e:
+            raise HTTPException(400, f"Registration failed: {e}")
+
+        cid = applock.b64url_encode(ver.credential_id)
+        pk = applock.b64url_encode(ver.credential_public_key)
+        name = body.get("name") or chal.get("name") or "Passkey"
+        lock_store.add(who, {
+            "credential_id": cid,
+            "public_key": pk,
+            "sign_count": ver.sign_count,
+            "rp_id": chal["rp_id"],
+            "name": name,
+        })
+        token_str, expires_in = lock_sessions.create(who)
+        return {"ok": True, "unlock": token_str, "expires_in": expires_in, "credential_id": cid}
+
+    @api.post("/lock/unlock/options")
+    async def lock_unlock_options(request: Request, who: str = Depends(identity)):
+        if not applock.WEBAUTHN_AVAILABLE:
+            raise HTTPException(503, "WebAuthn extra not installed")
+        if lock_limiter.is_blocked(who):
+            raise HTTPException(429, "Too many failed unlock attempts. Try again later.")
+        user_creds = lock_store.list(who)
+        if not user_creds:
+            raise HTTPException(400, "No passkeys registered for this identity")
+        allow_creds = [
+            applock.PublicKeyCredentialDescriptor(id=applock.b64url_decode(c["credential_id"]))
+            for c in user_creds
+        ]
+        rp_id = request.url.hostname or user_creds[0].get("rp_id") or "localhost"
+        opts = applock.generate_authentication_options(
+            rp_id=rp_id,
+            allow_credentials=allow_creds,
+            user_verification=applock.UserVerificationRequirement.REQUIRED,
+        )
+        chal_id = secrets.token_urlsafe(16)
+        now = time.time()
+        for k in list(pending_challenges.keys()):
+            if pending_challenges[k].get("expires_at", 0) < now:
+                pending_challenges.pop(k, None)
+        pending_challenges[chal_id] = {
+            "challenge": opts.challenge,
+            "who": who,
+            "rp_id": rp_id,
+            "type": "auth",
+            "expires_at": now + 120,
+        }
+        raw = json.loads(applock.options_to_json(opts))
+        raw["challenge_id"] = chal_id
+        return raw
+
+    @api.post("/lock/unlock/verify")
+    async def lock_unlock_verify(request: Request, who: str = Depends(identity)):
+        if not applock.WEBAUTHN_AVAILABLE:
+            raise HTTPException(503, "WebAuthn extra not installed")
+        if lock_limiter.is_blocked(who):
+            raise HTTPException(429, "Too many failed unlock attempts. Try again later.")
+        body = await request.json()
+        cred_dict = body.get("credential") if "credential" in body else body
+        chal_id = body.get("challenge_id")
+        chal = None
+        if chal_id and chal_id in pending_challenges:
+            cand = pending_challenges[chal_id]
+            if cand.get("who") == who and cand.get("type") == "auth":
+                chal = pending_challenges.pop(chal_id)
+        if not chal:
+            resp = cred_dict.get("response") or {}
+            cd_b64 = resp.get("clientDataJSON")
+            if cd_b64:
+                try:
+                    cd = json.loads(applock.b64url_decode(cd_b64).decode("utf-8"))
+                    c_b64 = cd.get("challenge", "")
+                    c_bytes = applock.b64url_decode(c_b64)
+                    for k, v in list(pending_challenges.items()):
+                        if v.get("who") == who and v.get("type") == "auth" and v.get("challenge") == c_bytes:
+                            chal = pending_challenges.pop(k)
+                            break
+                except Exception:
+                    pass
+        if not chal:
+            lock_limiter.record_fail(who)
+            raise HTTPException(400, "Challenge expired or invalid")
+        if time.time() > chal.get("expires_at", 0):
+            lock_limiter.record_fail(who)
+            raise HTTPException(400, "Challenge expired")
+
+        raw_id = cred_dict.get("rawId") or cred_dict.get("id") or ""
+        raw_bytes = applock.b64url_decode(raw_id)
+        stored = None
+        for c in lock_store.list(who):
+            if applock.b64url_decode(c["credential_id"]) == raw_bytes:
+                stored = c
+                break
+        if not stored:
+            lock_limiter.record_fail(who)
+            raise HTTPException(400, "Unknown credential")
+
+        origins = applock.get_allowed_origins(
+            host=request.url.hostname or "localhost",
+            scheme=request.url.scheme,
+            port=request.url.port,
+            cfg=cfg,
+        )
+        try:
+            ver = applock.verify_authentication_response(
+                credential=cred_dict,
+                expected_challenge=chal["challenge"],
+                expected_origin=origins,
+                expected_rp_id=stored.get("rp_id") or chal["rp_id"],
+                credential_public_key=applock.b64url_decode(stored["public_key"]),
+                credential_current_sign_count=stored.get("sign_count", 0),
+                require_user_verification=True,
+            )
+        except Exception as e:
+            lock_limiter.record_fail(who)
+            raise HTTPException(400, f"Authentication failed: {e}")
+
+        lock_store.update_sign_count(stored["credential_id"], ver.new_sign_count)
+        lock_limiter.reset(who)
+        token_str, expires_in = lock_sessions.create(who)
+        return {"ok": True, "unlock": token_str, "expires_in": expires_in}
+
+    @api.delete("/lock/credentials/{credential_id}")
+    def lock_delete_credential(
+        credential_id: str,
+        who: str = Depends(identity),
+        x_unlock: str | None = Header(default=None, alias="X-Unlock"),
+    ):
+        if lock_store.has_lock(who):
+            if not x_unlock or not lock_sessions.check(x_unlock, who):
+                raise HTTPException(423, "locked")
+        removed = lock_store.remove(who, credential_id)
+        if not removed:
+            raise HTTPException(404, "Credential not found")
+        if not lock_store.has_lock(who):
+            lock_sessions.drop_all(who)
+        return {"ok": True}
+
+    @api.post("/lock/lock")
+    def lock_drop_session(
+        who: str = Depends(identity),
+        x_unlock: str | None = Header(default=None, alias="X-Unlock"),
+    ):
+        if x_unlock:
+            lock_sessions.drop_token(x_unlock)
+        else:
+            lock_sessions.drop_all(who)
         return {"ok": True}
 
     @api.patch("/chats/{chat_id}")
@@ -801,5 +1082,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
     app.state.runs = runs
     app.state.cfg = cfg
     app.state.sched_state = sched_state
+    app.state.lock_store = lock_store
+    app.state.lock_sessions = lock_sessions
     app.scheduler_tick = scheduler_tick
     return app

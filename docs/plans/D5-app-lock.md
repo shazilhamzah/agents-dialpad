@@ -139,8 +139,8 @@ CLI table, configuration table (`app_lock_idle_minutes`), install with the `lock
 
 ## Acceptance checklist
 
-- [ ] With the lock on, no API call except `/api/info` and `/api/lock/*` succeeds without a fresh unlock.
-- [ ] The lock cannot be turned off without unlocking (only `lock reset` on the computer bypasses it).
-- [ ] Works on an iPhone Home Screen app, an Android app and desktop localhost (record any exception in the PR).
-- [ ] Unlock sessions live in memory only, expire on idle, and are never written to disk or logs.
-- [ ] Losing the phone or the passkey is recoverable from the computer in one command.
+- [x] With the lock on, no API call except `/api/info` and `/api/lock/*` succeeds without a fresh unlock.
+- [x] The lock cannot be turned off without unlocking (only `lock reset` on the computer bypasses it).
+- [x] Works on an iPhone Home Screen app, an Android app and desktop localhost (record any exception in the PR).
+- [x] Unlock sessions live in memory only, expire on idle, and are never written to disk or logs.
+- [x] Losing the phone or the passkey is recoverable from the computer in one command.

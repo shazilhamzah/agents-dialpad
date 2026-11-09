@@ -127,6 +127,43 @@ def server_check(host: str, port: int) -> Check:
         return Check("ok", f"Port {port}", "free (not running)")
 
 
+def applock_checks(data_dir: Path | None = None) -> list[Check]:
+    from .applock import WEBAUTHN_AVAILABLE, LockStore
+    from .devices import Devices
+
+    data_dir = data_dir or config.DATA
+    if not WEBAUTHN_AVAILABLE:
+        return [Check("info", "App lock", "extra not installed", "Install with: uv tool install --upgrade 'agents-dialpad[lock]'")]
+
+    store = LockStore(data_dir / "lock.json")
+    creds = store.list()
+    if not creds:
+        return [Check("ok", "App lock", "off")]
+
+    devs = Devices(data_dir / "devices.json")
+    known_devices = {d["id"] for d in devs.list()}
+
+    owner_locked = store.has_lock("owner")
+    device_ids = {c["who"] for c in creds if c.get("who") != "owner"}
+
+    checks = []
+    orphans = [dev_id for dev_id in sorted(device_ids) if dev_id not in known_devices]
+    for orphan in orphans:
+        checks.append(Check("warn", "App lock", f"passkey registered for non-existent device '{orphan}'", "Run `agents-dialpad lock reset --device <id>` to clean it up."))
+
+    valid_devices = [d for d in device_ids if d in known_devices]
+    parts = []
+    if owner_locked:
+        parts.append("owner")
+    if len(valid_devices) == 1:
+        parts.append("1 device")
+    elif len(valid_devices) > 1:
+        parts.append(f"{len(valid_devices)} devices")
+    summary = " and ".join(parts) if parts else "no active identities"
+    checks.insert(0, Check("ok", "App lock", f"on for {summary}"))
+    return checks
+
+
 def run_checks() -> list[Check]:
     checks: list[Check] = []
     v = sys.version_info
@@ -175,6 +212,7 @@ def run_checks() -> list[Check]:
     for unk in cfg.get("_unknown_disabled_agents", []):
         checks.append(Check("warn", "Disabled agent", f"unknown agent '{unk}'", "Check disabled_agents in config.json."))
     checks.extend(agent_checks(cfg))
+    checks.extend(applock_checks(Path(cfg["_data_dir"])))
     checks.append(server_check(cfg["host"], cfg["port"]))
     checks.extend(tailscale_checks(cfg["port"]))
     return checks

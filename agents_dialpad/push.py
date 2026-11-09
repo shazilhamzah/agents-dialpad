@@ -138,8 +138,18 @@ def build_payload(chat: dict, done: dict | None, show_titles: bool) -> dict:
     }
 
 
-def actions_allowed(sub: dict) -> bool:
-    """Check if action buttons should be sent to this subscription. D5 fills this in with app lock check."""
+def actions_allowed(sub: dict, data_dir: Path | None = None) -> bool:
+    """Check if action buttons should be sent to this subscription. False if device has app lock enabled."""
+    if not data_dir:
+        return True
+    try:
+        from .applock import LockStore
+        lock_store = LockStore(data_dir / "lock.json")
+        who = sub.get("device") or "owner"
+        if lock_store.has_lock(who):
+            return False
+    except Exception:
+        pass
     return True
 
 
@@ -157,7 +167,7 @@ def send_all(subs: Subscriptions, payload: dict, data_dir: Path, contact: str) -
     sent = 0
     for sub in subs.all():
         sub_payload = payload
-        if "approval" in payload and not actions_allowed(sub):
+        if "approval" in payload and not actions_allowed(sub, data_dir):
             sub_payload = {k: v for k, v in payload.items() if k != "approval"}
         try:
             webpush(

@@ -28,12 +28,16 @@ Issues = "https://github.com/shazilhamzah/agents-dialpad/issues"
 push = [
     "pywebpush>=2",
 ]
+lock = [
+    "webauthn>=2",
+]
 
 [dependency-groups]
 dev = [
     "pytest>=8",
     "httpx>=0.27",
     "pywebpush>=2",
+    "webauthn>=2",
 ]
 
 [tool.hatch.build.targets.wheel]

@@ -22,6 +22,7 @@
   "codex_default_model": "",
   "disabled_agents": [],
   "limit_alert_percent": 20,
+  "app_lock_idle_minutes": 5,
   "schedules": [
     {
       "name": "Morning summary",

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebAuthn Passkey Spike</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; line-height: 1.5; }
+    button { padding: 10px 16px; font-size: 1rem; border-radius: 8px; border: 1px solid #ccc; background: #eee; cursor: pointer; margin-right: 8px; margin-bottom: 8px; }
+    button:hover { background: #ddd; }
+    pre { background: #f4f4f4; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
+    .status { padding: 8px 12px; border-radius: 6px; margin: 10px 0; }
+    .ok { background: #e6f4ea; color: #137333; }
+    .err { background: #fce8e6; color: #c5221f; }
+  </style>
+</head>
+<body>
+  <h1>WebAuthn Passkey Spike</h1>
+  <p id="context-info"></p>
+
+  <div>
+    <button id="btn-check">Check Authenticator</button>
+    <button id="btn-register">Register Passkey</button>
+    <button id="btn-auth">Authenticate</button>
+  </div>
+
+  <div id="status"></div>
+  <h3>Log:</h3>
+  <pre id="log"></pre>
+
+  <script>
+    const logEl = document.getElementById('log');
+    const statusEl = document.getElementById('status');
+    const contextEl = document.getElementById('context-info');
+
+    function log(msg, obj) {
+      const line = typeof obj !== 'undefined' ? `${msg} ${JSON.stringify(obj, null, 2)}` : msg;
+      logEl.textContent += line + '\n';
+      console.log(msg, obj);
+    }
+    function setStatus(msg, isOk) {
+      statusEl.className = 'status ' + (isOk ? 'ok' : 'err');
+      statusEl.textContent = msg;
+    }
+
+    contextEl.textContent = `Origin: ${location.origin} | Secure context: ${window.isSecureContext}`;
+
+    function bufferToBase64url(buffer) {
+      const bytes = new Uint8Array(buffer);
+      let str = '';
+      for (const char of bytes) str += String.fromCharCode(char);
+      return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    }
+
+    function base64urlToBuffer(base64url) {
+      let b64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+      while (b64.length % 4) b64 += '=';
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes.buffer;
+    }
+
+    document.getElementById('btn-check').onclick = async () => {
+      if (!window.PublicKeyCredential) {
+        return setStatus('PublicKeyCredential not supported in this browser', false);
+      }
+      try {
+        const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+        log('isUserVerifyingPlatformAuthenticatorAvailable:', available);
+        setStatus(`Platform authenticator available: ${available}`, available);
+      } catch (err) {
+        log('Check failed:', err);
+        setStatus(`Check failed: ${err.message}`, false);
+      }
+    };
+
+    document.getElementById('btn-register').onclick = async () => {
+      try {
+        log('Requesting registration options...');
+        const optRes = await fetch('/register/options', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'device-owner' }) });
+        const options = await optRes.json();
+        log('Registration options:', options);
+
+        options.challenge = base64urlToBuffer(options.challenge);
+        options.user.id = base64urlToBuffer(options.user.id);
+        if (options.excludeCredentials) {
+          options.excludeCredentials.forEach(c => c.id = base64urlToBuffer(c.id));
+        }
+
+        log('Creating credentials...');
+        const cred = await navigator.credentials.create({ publicKey: options });
+        log('Credential created:', cred);
+
+        const credentialJSON = {
+          id: cred.id,
+          rawId: bufferToBase64url(cred.rawId),
+          type: cred.type,
+          response: {
+            attestationObject: bufferToBase64url(cred.response.attestationObject),
+            clientDataJSON: bufferToBase64url(cred.response.clientDataJSON),
+          },
+        };
+
+        const verifyRes = await fetch('/register/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(credentialJSON) });
+        const verifyData = await verifyRes.json();
+        log('Verification result:', verifyData);
+        if (verifyData.ok) {
+          setStatus('Passkey registered successfully!', true);
+        } else {
+          setStatus(`Registration failed: ${verifyData.error}`, false);
+        }
+      } catch (err) {
+        log('Register error:', err);
+        setStatus(`Register error: ${err.message}`, false);
+      }
+    };
+
+    document.getElementById('btn-auth').onclick = async () => {
+      try {
+        log('Requesting authentication options...');
+        const optRes = await fetch('/authenticate/options', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+        const options = await optRes.json();
+        log('Auth options:', options);
+
+        options.challenge = base64urlToBuffer(options.challenge);
+        if (options.allowCredentials) {
+          options.allowCredentials.forEach(c => c.id = base64urlToBuffer(c.id));
+        }
+
+        log('Getting credential assertion...');
+        const assertion = await navigator.credentials.get({ publicKey: options });
+        log('Assertion received:', assertion);
+
+        const assertionJSON = {
+          id: assertion.id,
+          rawId: bufferToBase64url(assertion.rawId),
+          type: assertion.type,
+          response: {
+            authenticatorData: bufferToBase64url(assertion.response.authenticatorData),
+            clientDataJSON: bufferToBase64url(assertion.response.clientDataJSON),
+            signature: bufferToBase64url(assertion.response.signature),
+            userHandle: assertion.response.userHandle ? bufferToBase64url(assertion.response.userHandle) : null,
+          },
+        };
+
+        const verifyRes = await fetch('/authenticate/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(assertionJSON) });
+        const verifyData = await verifyRes.json();
+        log('Auth verify result:', verifyData);
+        if (verifyData.ok) {
+          setStatus('Authenticated successfully with passkey!', true);
+        } else {
+          setStatus(`Authentication failed: ${verifyData.error}`, false);
+        }
+      } catch (err) {
+        log('Auth error:', err);
+        setStatus(`Auth error: ${err.message}`, false);
+      }
+    };
+  </script>
+</body>
+</html>

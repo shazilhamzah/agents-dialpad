@@ -1,0 +1,27 @@
+{
+  "rp_id": "localhost",
+  "origin": "http://localhost:8787",
+  "reg_challenge_b64": "dGVzdF9jaGFsbGVuZ2VfMTIzNDU2Nzg5MDEyMzQ1Ng",
+  "reg_credential": {
+    "id": "Y3JlZF9pZF8xMjM0NTY3OA",
+    "rawId": "Y3JlZF9pZF8xMjM0NTY3OA",
+    "response": {
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YViUSZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2NFAAAAAAAAAAAAAAAAAAAAAAAAAAAAEGNyZWRfaWRfMTIzNDU2NzilAQIDJiABIVggq5BqKNzB9ZNywm_8AIiNHohVrEQzqVy_HetKHa7p2B0iWCBoZjQAvyNQwAy5O-VJwzjYYHwKnhwVKAP_Z_zGRkKbWw",
+      "clientDataJSON": "eyJ0eXBlIjogIndlYmF1dGhuLmNyZWF0ZSIsICJjaGFsbGVuZ2UiOiAiZEdWemRGOWphR0ZzYkdWdVoyVmZNVEl6TkRVMk56ZzVNREV5TXpRMU5nIiwgIm9yaWdpbiI6ICJodHRwOi8vbG9jYWxob3N0Ojg3ODcifQ"
+    },
+    "type": "public-key"
+  },
+  "auth_challenge_b64": "YXV0aF9jaGFsbGVuZ2VfMTIzNDU2Nzg5MDEyMzQ1Ng",
+  "auth_credential": {
+    "id": "Y3JlZF9pZF8xMjM0NTY3OA",
+    "rawId": "Y3JlZF9pZF8xMjM0NTY3OA",
+    "response": {
+      "authenticatorData": "SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2MFAAAAAQ",
+      "clientDataJSON": "eyJ0eXBlIjogIndlYmF1dGhuLmdldCIsICJjaGFsbGVuZ2UiOiAiWVhWMGFGOWphR0ZzYkdWdVoyVmZNVEl6TkRVMk56ZzVNREV5TXpRMU5nIiwgIm9yaWdpbiI6ICJodHRwOi8vbG9jYWxob3N0Ojg3ODcifQ",
+      "signature": "MEUCIQCrtyjTDFLJ4SkrGlU-P6ObcRZWVr8Tt1Kup6Q6mTnXeAIgCP9m_Ja51VKvo8t4lCbCqph6hhfp2FgbB674pYLt884"
+    },
+    "type": "public-key"
+  },
+  "cred_id_b64": "Y3JlZF9pZF8xMjM0NTY3OA",
+  "public_key_b64": "pQECAyYgASFYIKuQaijcwfWTcsJv_ACIjR6IVaxEM6lcvx3rSh2u6dgdIlggaGY0AL8jUMAMuTvlScM42GB8Cp4cFSgD_2f8xkZCm1s"
+}
