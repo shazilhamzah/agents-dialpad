@@ -47,6 +47,9 @@ out({"type": "stream_event", "event": {"type": "message_start", "message": {"id"
 if is_stream and "NEEDS_APPROVAL" in prompt:
     req_id = "req-1"
     tool_use_id = "toolu-1"
+    cmd = "echo hi"
+    if "LONG_COMMAND" in prompt:
+        cmd = "\n".join([f"echo line_{i} && npm run build -- --target=web-{i}" for i in range(20)])
     out({
         "type": "control_request",
         "request_id": req_id,
@@ -54,7 +57,7 @@ if is_stream and "NEEDS_APPROVAL" in prompt:
             "subtype": "can_use_tool",
             "tool_name": "Bash",
             "display_name": "Bash",
-            "input": {"command": "echo hi"},
+            "input": {"command": cmd},
             "description": "Run echo hi",
             "decision_reason_type": "subcommandResults",
             "tool_use_id": tool_use_id,

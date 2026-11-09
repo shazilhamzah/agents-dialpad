@@ -126,7 +126,7 @@ Show all expands it, Copy copies all of it, Allow/Deny still work, and the page 
 
 ## Acceptance checklist
 
-- [ ] A 500-character command is fully readable on a 375 px screen.
-- [ ] Antigravity approval cards show the command.
-- [ ] Old saved chats with approval cards still render.
-- [ ] No unescaped agent text reaches `innerHTML`.
+- [x] A 500-character command is fully readable on a 375 px screen.
+- [x] Antigravity approval cards show the command.
+- [x] Old saved chats with approval cards still render.
+- [x] No unescaped agent text reaches `innerHTML`.

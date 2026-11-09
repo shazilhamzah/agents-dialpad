@@ -18,6 +18,7 @@ import time
 from typing import AsyncIterator
 
 from ._cmd import extra_args
+from ..approvals import approval_event
 
 MODES = {"readonly": "plan", "edit": "accept-edits", "ask": "default", "full": "accept-edits"}  # "full" also adds --dangerously-skip-permissions
 MAX_PROMPT_CHARS = 28_000  # Windows command-line limit is ~32k
@@ -404,16 +405,15 @@ class AntigravityProvider:
                     tool_call = params.get("toolCall") or {}
                     tool_name = tool_call.get("name", "unknown")
                     args_data = tool_call.get("rawInput") or tool_call.get("args") or {}
-                    cmd = args_data.get("CommandLine", "") if isinstance(args_data, dict) else str(args_data)
                     desc = args_data.get("toolSummary", "") if isinstance(args_data, dict) else tool_call.get("title", "")
-                    yield {
-                        "type": "approval",
-                        "id": req_id,
-                        "req_id": req_id,
-                        "tool": tool_name,
-                        "command": cmd,
-                        "description": desc,
-                    }
+                    if not desc:
+                        desc = tool_call.get("title", "")
+                    yield approval_event(
+                        req_id=req_id,
+                        tool=tool_name,
+                        raw_input=args_data,
+                        description=desc,
+                    )
                     allow, by = await run.wait_decision(req_id, timeout)
                     option_id = "allow" if allow else "deny"
                     resp = {
@@ -430,7 +430,6 @@ class AntigravityProvider:
                     yield {
                         "type": "approval_result",
                         "id": req_id,
-                        "req_id": req_id,
                         "allow": allow,
                         "by": by,
                     }

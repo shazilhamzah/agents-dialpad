@@ -92,7 +92,7 @@ const postJSON = async (p, b) => (await api(p, { method: 'POST', body: JSON.stri
 function forgetToken() { LS.del('ag_token'); token = null; }
 
 /* ===================== state ===================== */
-const state = { chats: [], sig: '', info: null, drafts: {}, openTools: new Set(), query: '', quick: {} };
+const state = { chats: [], sig: '', info: null, drafts: {}, openTools: new Set(), expandedApprovals: new Set(), query: '', quick: {} };
 let cur = null;           // the open chat view (see createChatView)
 
 /* ===================== sheets, menu, confirm ===================== */
@@ -981,6 +981,7 @@ async function openChat(id) {
   cur.pending = [];       // attachments waiting to be sent
   cur.uploading = 0;
   state.openTools = new Set();
+  state.expandedApprovals = new Set();
   cur.renderThread();
   cur.scrollToEnd(true);
   renderList();
@@ -1458,7 +1459,17 @@ function assistantHTML(events, live) {
     } else if (ev.type === 'tool_result') {
       if (toolById[ev.id]) toolById[ev.id].result = ev;
     } else if (ev.type === 'approval') {
-      const b = { kind: 'approval', id: String(ev.id), tool: ev.tool, arg: toolArg(ev.input), result: null };
+      const cmd = ev.command != null ? String(ev.command) : (toolArg(ev.input) || '');
+      const b = {
+        kind: 'approval',
+        id: String(ev.id),
+        tool: ev.tool || 'Command',
+        command: cmd,
+        description: ev.description || '',
+        input: (ev.input && typeof ev.input === 'object') ? ev.input : {},
+        truncated: !!ev.truncated,
+        result: null,
+      };
       approvalById[ev.id] = b; blocks.push(b);
     } else if (ev.type === 'approval_result') {
       if (approvalById[ev.id]) {
@@ -1499,7 +1510,74 @@ function assistantHTML(events, live) {
         }
         statusHtml = `<div class="approval-status foot">${esc(label)}</div>`;
       }
-      return `<div class="approval"><div class="approval-title">Allow this?</div><div class="approval-tool"><span class="ic">${icon('term')}</span><span class="name">${esc(b.tool)}</span><span class="arg">${esc(b.arg)}</span></div>${statusHtml}</div>`;
+
+      const descHtml = b.description ? `<p class="approval-desc">${esc(b.description)}</p>` : '';
+
+      let cmdHtml = '';
+      if (b.command) {
+        const lines = b.command.split('\n');
+        const lineCount = lines.length;
+        const needsClamp = lineCount > 6 || b.command.length > 400;
+        const isExpanded = state.expandedApprovals && state.expandedApprovals.has(b.id);
+        const clampedCls = (needsClamp && !isExpanded) ? ' clamped' : '';
+        const showAllBtn = (needsClamp && !isExpanded)
+          ? `<button class="approval-expand" type="button" data-approval-expand="${esc(b.id)}">… Show all (${lineCount} lines)</button>`
+          : '';
+        const headHtml = `<div class="approval-cmd-head"><span class="tool-name"><span class="ic">${icon('term')}</span>$ ${esc(b.tool)}</span><button class="btn secondary sm approval-copy" type="button" aria-label="Copy command" data-approval-copy>Copy</button></div>`;
+        cmdHtml = `<div class="approval-cmd-box">${headHtml}<pre class="approval-cmd${clampedCls}"><code>${esc(b.command)}</code></pre>${showAllBtn}</div>`;
+      }
+
+      const isFileEdit = /^(edit|multiedit|write)$/i.test(b.tool);
+      const filePath = b.input.file_path || b.input.path || '';
+      const fileHtml = (isFileEdit && filePath) ? `<div class="approval-file">File: <code>${esc(filePath)}</code></div>` : '';
+
+      let diffLinesHtml = '';
+      if (isFileEdit) {
+        const tName = (b.tool || '').toLowerCase();
+        if (tName === 'edit') {
+          const oldLines = b.input.old_string ? String(b.input.old_string).split('\n') : [];
+          const newLines = b.input.new_string ? String(b.input.new_string).split('\n') : [];
+          const dls = [
+            ...oldLines.map((l) => `<div class="dl del">- ${esc(l)}</div>`),
+            ...newLines.map((l) => `<div class="dl add">+ ${esc(l)}</div>`),
+          ];
+          if (dls.length) diffLinesHtml = `<div class="diff-container diff-lines">${dls.join('')}</div>`;
+        } else if (tName === 'multiedit') {
+          const edits = Array.isArray(b.input.edits) ? b.input.edits : [];
+          const dls = [];
+          for (const ed of edits) {
+            if (ed.old_string) String(ed.old_string).split('\n').forEach((l) => dls.push(`<div class="dl del">- ${esc(l)}</div>`));
+            if (ed.new_string) String(ed.new_string).split('\n').forEach((l) => dls.push(`<div class="dl add">+ ${esc(l)}</div>`));
+          }
+          if (dls.length) diffLinesHtml = `<div class="diff-container diff-lines">${dls.join('')}</div>`;
+        } else if (tName === 'write') {
+          if (b.input.content) {
+            const contentLines = String(b.input.content).split('\n');
+            const first20 = contentLines.slice(0, 20);
+            const dls = first20.map((l) => `<div class="dl add">+ ${esc(l)}</div>`);
+            if (contentLines.length > 20) {
+              dls.push(`<div class="dl meta">… (${contentLines.length - 20} more lines)</div>`);
+            }
+            diffLinesHtml = `<div class="diff-container diff-lines">${dls.join('')}</div>`;
+          }
+        }
+      }
+
+      const truncHtml = b.truncated ? '<p class="approval-note">Very long. The rest is cut off here; Deny if unsure.</p>' : '';
+
+      const excludeKeys = new Set([
+        'command', 'CommandLine', 'cmd', 'file_path', 'path', 'description', 'toolSummary',
+        'old_string', 'new_string', 'content', 'edits'
+      ]);
+      const rest = {};
+      for (const [k, v] of Object.entries(b.input || {})) {
+        if (!excludeKeys.has(k)) rest[k] = v;
+      }
+      const detailsHtml = Object.keys(rest).length
+        ? `<details class="approval-details"><summary>Details</summary><pre class="approval-details-json"><code>${esc(JSON.stringify(rest, null, 2))}</code></pre></details>`
+        : '';
+
+      return `<div class="approval"><div class="approval-title">Allow this?</div>${descHtml}${cmdHtml}${fileHtml}${diffLinesHtml}${truncHtml}${detailsHtml}${statusHtml}</div>`;
     }
     const status = !b.result ? '<span class="st"><span class="spin"></span></span>'
       : b.result.is_error ? `<span class="st err">${icon('x')}</span>` : `<span class="st">${icon('check')}</span>`;
@@ -1580,6 +1658,31 @@ document.addEventListener('click', async (e) => {
   const ok = await copyText(b.closest('.md-code').querySelector('code').textContent);
   b.textContent = ok ? 'Copied' : 'Copy failed'; b.classList.toggle('done', ok);
   setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('done'); }, 1600);
+});
+
+/* ---- approval copy button ---- */
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-approval-copy]');
+  if (!b) return;
+  const box = b.closest('.approval-cmd-box');
+  const code = box ? box.querySelector('.approval-cmd code') : null;
+  const ok = await copyText(code ? code.textContent : '');
+  b.textContent = ok ? 'Copied' : 'Copy failed';
+  setTimeout(() => { b.textContent = 'Copy'; }, 1600);
+});
+
+/* ---- approval expand button (Show all) ---- */
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-approval-expand]');
+  if (!b) return;
+  const id = b.dataset.approvalExpand;
+  state.expandedApprovals.add(id);
+  const box = b.closest('.approval-cmd-box');
+  if (box) {
+    const pre = box.querySelector('.approval-cmd');
+    if (pre) pre.classList.remove('clamped');
+    b.remove();
+  }
 });
 
 /* ---- approval buttons (Allow / Deny) ---- */

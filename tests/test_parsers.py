@@ -76,10 +76,19 @@ def test_claude_control_request_becomes_approval():
             "subtype": "can_use_tool",
             "tool_name": "PowerShell",
             "input": {"command": "dir"},
+            "description": "list directory",
         },
     }
     (ev,) = p.feed(req)
-    assert ev == {"type": "approval", "id": "req-123", "tool": "PowerShell", "input": {"command": "dir"}}
+    assert ev == {
+        "type": "approval",
+        "id": "req-123",
+        "tool": "PowerShell",
+        "command": "dir",
+        "description": "list directory",
+        "input": {"command": "dir"},
+        "truncated": False,
+    }
 
 
 def test_claude_parses_recorded_control_fixtures():
@@ -102,6 +111,8 @@ def test_claude_parses_recorded_control_fixtures():
     assert "done" in event_types
     appr = next(e for e in allow_events if e["type"] == "approval")
     assert appr["tool"] in ("PowerShell", "Bash")
+    assert appr["command"]
+    assert appr["description"] == "Write text to foo.txt if it doesn't already exist"
 
     # Deny fixture
     p_deny = claude._Parser()
@@ -196,6 +207,26 @@ def test_agy_acp_recorded_fixtures():
     resume_msgs = load_fixture("resume_run.jsonl")
     load_req = next(m["message"] for m in resume_msgs if m.get("message", {}).get("method") == "session/load")
     assert load_req["params"]["sessionId"]
+
+
+def test_agy_acp_fixture_produces_approval_event():
+    fixture_dir = Path(__file__).parent / "fixtures" / "agy_acp"
+    with open(fixture_dir / "allow_run.jsonl", encoding="utf-8") as f:
+        msgs = [json.loads(line) for line in f]
+    perm_req = next(m["message"] for m in msgs if m.get("message", {}).get("method") == "session/request_permission")
+    tool_call = perm_req["params"]["toolCall"]
+    from agents_dialpad.approvals import approval_event
+    ev = approval_event(
+        req_id=perm_req.get("id"),
+        tool=tool_call.get("name"),
+        raw_input=tool_call.get("rawInput") or tool_call.get("args") or {},
+        description=(tool_call.get("rawInput") or {}).get("toolSummary") or tool_call.get("title", ""),
+    )
+    assert ev["type"] == "approval"
+    assert ev["command"] == "echo hello"
+    assert ev["description"] == "Run echo hello"
+    assert ev["truncated"] is False
+
 # ---------------------------------------------------------------- Codex
 def _load_fixture(name: str) -> list[dict]:
     p = FIXTURES / name

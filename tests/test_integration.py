@@ -348,6 +348,14 @@ def test_ask_mode_waits_and_runs_after_allow(env, calls):
         assert "pong approved" in text_of(events)
         assert any(e.get("type") == "approval" and (e.get("id") == "req-1" or e.get("req_id") == "req-1") for e in events)
         assert any(e.get("type") == "approval_result" and e.get("allow") is True and e.get("by") == "user" for e in events)
+        chat = client.get(f"/api/chats/{cid}", headers=h).json()
+        saved_appr = next(
+            ev
+            for msg in chat.get("messages", [])
+            for ev in msg.get("events", [])
+            if ev.get("type") == "approval"
+        )
+        assert saved_appr["command"] == "echo hi"
 
 
 def test_ask_mode_continues_after_deny(env, calls):
@@ -518,6 +526,14 @@ def test_agy_ask_mode_waits_and_runs_after_allow(env, calls):
         assert "pong approved" in text_of(events)
         assert any(e.get("type") == "approval" and (e.get("id") == "req-1" or e.get("req_id") == "req-1") for e in events)
         assert any(e.get("type") == "approval_result" and e.get("allow") is True and e.get("by") == "user" for e in events)
+        chat = client.get(f"/api/chats/{cid}", headers=h).json()
+        saved_appr = next(
+            ev
+            for msg in chat.get("messages", [])
+            for ev in msg.get("events", [])
+            if ev.get("type") == "approval"
+        )
+        assert saved_appr["command"] == "echo hi"
 
 
 def test_agy_ask_mode_continues_after_deny(env, calls):

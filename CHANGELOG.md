@@ -46,6 +46,7 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 - `app.create_app()` builds an independent app, which is what lets the tests run many isolated apps.
 
 ### Fixed
+- Fixed: approval cards cut long commands off, and showed nothing for Antigravity.
 - Merge-safe saving: a finishing reply no longer overwrites changes made meanwhile (such as a rename).
 
 ## [0.1.0] - 2026-11-08

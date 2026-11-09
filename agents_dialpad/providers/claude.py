@@ -21,6 +21,7 @@ import shutil
 from typing import AsyncIterator
 
 from ._cmd import extra_args
+from ..approvals import approval_event
 
 # UI mode -> `claude --permission-mode`
 MODES = {"readonly": "plan", "edit": "acceptEdits", "ask": "default", "full": "bypassPermissions"}
@@ -92,13 +93,14 @@ class _Parser:
         elif t == "control_request":
             req = o.get("request") or {}
             if req.get("subtype") == "can_use_tool":
+                desc = o.get("description") or req.get("description") or (req.get("input") or {}).get("description") or ""
                 out.append(
-                    {
-                        "type": "approval",
-                        "id": o.get("request_id"),
-                        "tool": req.get("tool_name"),
-                        "input": req.get("input"),
-                    }
+                    approval_event(
+                        req_id=o.get("request_id"),
+                        tool=req.get("tool_name"),
+                        raw_input=req.get("input"),
+                        description=desc,
+                    )
                 )
         elif t == "result":
             denials = [d.get("tool_name") if isinstance(d, dict) else str(d) for d in o.get("permission_denials") or []]
