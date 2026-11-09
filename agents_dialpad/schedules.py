@@ -70,8 +70,11 @@ def normalize(raw: object, cfg: dict) -> tuple[list[dict], list[str]]:
             sched_problems.append(f"Schedule '{name}': unknown project '{project}'.")
 
         agent = item.get("agent") or item.get("provider")
+        disabled_agents = set(cfg.get("disabled_agents", []))
         if not isinstance(agent, str) or agent not in {"claude", "antigravity", "codex"}:
             sched_problems.append(f"Schedule '{name}': unknown agent '{agent}'. Must be claude, antigravity, or codex.")
+        elif agent in disabled_agents:
+            sched_problems.append(f"Schedule '{name}': agent '{agent}' is turned off in config.json.")
 
         mode = item.get("mode") or "readonly"
         if mode not in {"readonly", "edit", "full"}:

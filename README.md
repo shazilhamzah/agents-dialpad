@@ -127,6 +127,8 @@ Everything lives in `config.json` in the data folder (see [`config.example.json`
 | `push_show_titles` | Include chat title in push notifications (`false` by default for privacy). |
 | `push_contact` | VAPID `sub` claim (`mailto:` address). Default: `mailto:agents-dialpad@example.com`. |
 | `codex_models` | List of model names to offer for Codex chats (default `[]` offers "Default"). |
+| `codex_default_model` | Model string to use for Codex chats when "Default" is selected (e.g. `"gpt-5.1-custom"`). Default `""` (uses Codex's configured model). |
+| `disabled_agents` | List of agent names to hide completely (e.g. `["codex"]`). Existing chats open read-only. Default `[]`. |
 
 ### Access token
 
@@ -137,7 +139,17 @@ Static: generated once and reused on every run. Order of precedence: env var `AG
 
 Pick a model when starting a chat, or tap the model chip above the message box to switch; it applies from your next
 message. Claude Code's list is in `agents_dialpad/providers/claude.py`; Antigravity's comes live from `agy models`;
-Codex offers "Default" plus any models configured in `"codex_models"`.
+Codex offers "Default" plus any models configured in `"codex_models"`. If `"codex_default_model"` is set, "Default" is labelled "Default (<model>)" and passes that model to Codex.
+
+### Codex
+
+Codex requires an account permitted by OpenAI to run it. There are two ways to get access:
+1. A **ChatGPT plan** that includes Codex (Plus, Pro, Team), authenticated with `codex login`.
+2. An **OpenAI API key** (`codex login --with-api-key`), billed per use.
+
+If the agent picker shows **"Codex (sign in on the computer)"**, the Codex CLI is installed on the host machine but not signed in; run `codex login` in a terminal on the computer hosting agents-dialpad.
+
+If your OpenAI account does not support the default model named in `~/.codex/config.toml`, configure `"codex_default_model": "<model>"` in `config.json`. To hide Codex or any other unused agent from the picker, add it to `"disabled_agents": ["codex"]`.
 
 ### Always-on instructions
 

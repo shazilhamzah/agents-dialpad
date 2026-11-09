@@ -6,6 +6,7 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 ## [Unreleased]
 
 ### Added
+- **Codex readiness & friendly errors:** The app detects when Codex is not signed in and shows "Codex (sign in on the computer)" in the picker instead of failing on first message. Raw JSON error strings are mapped to clear human-readable messages with actionable buttons (such as **Change model**). Added `"codex_default_model"` to configure default model without editing `~/.codex/config.toml`, and `"disabled_agents"` to hide unused agents from the UI.
 - **Command approvals:** "Ask me before commands" permission mode for Claude Code and Antigravity chats (via ACP), presenting interactive cards with Allow and Deny buttons in chat, web push notifications for approval requests, and configurable auto-deny timeouts (`approval_timeout_seconds` / `AG_APPROVAL_TIMEOUT`).
 - **Per-device tokens:** Separate, revocable tokens per phone or tablet with `agents-dialpad device` and the Devices menu.
 - **Attachments:** Upload screenshots, PDFs, logs and source files via a paperclip button in the composer.

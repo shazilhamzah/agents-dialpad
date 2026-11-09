@@ -90,6 +90,11 @@ class AntigravityProvider:
     def available(self) -> bool:
         return _exe() is not None
 
+    async def status(self) -> dict:
+        if not self.available():
+            return {"state": "not_installed", "note": "not installed"}
+        return {"state": "ready", "note": ""}
+
     async def models(self) -> list[dict]:
         """`agy models` prints `<id>\\t<label>` per line; cached for 10 minutes."""
         global _models_cache

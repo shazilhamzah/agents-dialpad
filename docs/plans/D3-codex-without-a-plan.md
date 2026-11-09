@@ -138,8 +138,8 @@ and **Change model** opens the model sheet. With `"disabled_agents": ["codex"]`:
 
 ## Acceptance checklist
 
-- [ ] With Codex signed out, the app never lets you start a Codex chat that is sure to fail.
-- [ ] No raw JSON error reaches the chat for the error kinds in the table.
-- [ ] `codex_default_model` works without editing `~/.codex/config.toml`.
-- [ ] `disabled_agents` hides an agent everywhere new chats are started (New chat sheet, schedules validation).
-- [ ] Status checks never block a page load for more than 10 seconds, and are cached.
+- [x] With Codex signed out, the app never lets you start a Codex chat that is sure to fail.
+- [x] No raw JSON error reaches the chat for the error kinds in the table.
+- [x] `codex_default_model` works without editing `~/.codex/config.toml`.
+- [x] `disabled_agents` hides an agent everywhere new chats are started (New chat sheet, schedules validation).
+- [x] Status checks never block a page load for more than 10 seconds, and are cached.

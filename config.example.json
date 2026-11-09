@@ -18,6 +18,8 @@
   "approval_timeout_seconds": 600,
   "allow_full_access": false,
   "codex_models": [],
+  "codex_default_model": "",
+  "disabled_agents": [],
   "limit_alert_percent": 20,
   "schedules": [
     {

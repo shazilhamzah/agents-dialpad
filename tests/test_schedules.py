@@ -74,6 +74,14 @@ def test_full_access_allowed_when_configured():
     assert valid[0]["mode"] == "full"
 
 
+def test_disabled_agent_in_schedule_is_reported():
+    cfg = {"projects": {"repo": "/path/to/repo"}, "disabled_agents": ["codex"]}
+    raw = [{"name": "CodexSched", "at": "08:00", "days": "daily", "project": "repo", "agent": "codex", "prompt": "run"}]
+    valid, problems = normalize(raw, cfg)
+    assert len(valid) == 0
+    assert any("turned off in config.json" in p for p in problems)
+
+
 def test_is_due_and_grace():
     s = {"at": "08:00", "days": ["mon", "wed", "fri"]}
     # Mon at 08:00 exactly -> due

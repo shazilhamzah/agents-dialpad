@@ -1,4 +1,5 @@
 """End-to-end tests: the real FastAPI app, real subprocesses, with fake `claude` / `agy` CLIs (no subscriptions needed)."""
+import asyncio
 import json
 import sys
 import time
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 from agents_dialpad import config, pairing
 from agents_dialpad.app import create_app
 from agents_dialpad.keepawake import KeepAwake
-from agents_dialpad.providers import antigravity
+from agents_dialpad.providers import antigravity, codex
 
 FAKES = Path(__file__).parent / "fake_agents"
 
@@ -29,6 +30,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_LOG", str(tmp_path / "calls.jsonl"))
     monkeypatch.setattr(antigravity, "_models_cache", None)
     monkeypatch.setattr(antigravity, "_limits_cache", None)
+    monkeypatch.setattr(codex, "_status_cache", (time.time(), {"state": "ready", "note": ""}))
     (tmp_path / "ws").mkdir()
     base = {"projects": {"workspace": str(tmp_path / "ws")}}
 
@@ -1531,3 +1533,184 @@ def test_bad_upload_content_length_is_a_400(env):
         cid = client.post("/api/chats", headers=h, json={"provider": "claude", "project": "workspace"}).json()["id"]
         r = client.put(f"/api/chats/{cid}/uploads?name=a.txt", headers={**h, "Content-Length": "abc"}, content=b"")
         assert r.status_code in (400, 422)
+
+
+# --------------------------------------------------------------------------- D3 Codex readiness
+def test_codex_status_signed_in_and_out(env, monkeypatch):
+    from agents_dialpad.providers import codex
+    prov = codex.CodexProvider()
+
+    # Signed in
+    monkeypatch.setenv("FAKE_CODEX_LOGIN", "signed_in")
+    monkeypatch.setattr(codex, "_status_cache", None)
+    st = asyncio.run(prov.status())
+    assert st["state"] == "ready"
+    assert st["note"] == ""
+
+    # Signed out
+    monkeypatch.setenv("FAKE_CODEX_LOGIN", "signed_out")
+    monkeypatch.setattr(codex, "_status_cache", None)
+    st = asyncio.run(prov.status())
+    assert st["state"] == "not_signed_in"
+    assert "not signed in" in st["note"].lower() or "codex isn't signed in" in st["note"].lower()
+
+
+def test_codex_status_is_cached(env, calls, monkeypatch):
+    from agents_dialpad.providers import codex
+    prov = codex.CodexProvider()
+    monkeypatch.setenv("FAKE_CODEX_LOGIN", "signed_in")
+    monkeypatch.setattr(codex, "_status_cache", None)
+
+    st1 = asyncio.run(prov.status())
+    assert st1["state"] == "ready"
+    login_calls_1 = [c for c in calls() if "login" in c.get("argv", [])]
+    assert len(login_calls_1) == 1
+
+    # Second call uses cache
+    st2 = asyncio.run(prov.status())
+    assert st2["state"] == "ready"
+    login_calls_2 = [c for c in calls() if "login" in c.get("argv", [])]
+    assert len(login_calls_2) == 1
+
+
+def test_info_reports_status_and_hides_disabled_agents(env, monkeypatch):
+    from agents_dialpad.providers import codex
+    monkeypatch.setenv("FAKE_CODEX_LOGIN", "signed_in")
+    monkeypatch.setattr(codex, "_status_cache", None)
+
+    # With codex enabled
+    client, auth = env()
+    with client:
+        r = client.get("/api/info", headers=auth)
+        assert r.status_code == 200
+        info = r.json()
+        prov_names = [p["name"] for p in info["providers"]]
+        assert "codex" in prov_names
+        codex_p = next(p for p in info["providers"] if p["name"] == "codex")
+        assert codex_p["status"]["state"] == "ready"
+
+    # With codex disabled
+    client2, auth2 = env(disabled_agents=["codex"])
+    with client2:
+        r2 = client2.get("/api/info", headers=auth2)
+        assert r2.status_code == 200
+        info2 = r2.json()
+        prov_names2 = [p["name"] for p in info2["providers"]]
+        assert "codex" not in prov_names2
+        assert "codex" in info2["disabled_agents"]
+
+
+def test_create_chat_refuses_signed_out_codex(env, monkeypatch):
+    from agents_dialpad.providers import codex
+    monkeypatch.setenv("FAKE_CODEX_LOGIN", "signed_out")
+    monkeypatch.setattr(codex, "_status_cache", None)
+    client, auth = env()
+    with client:
+        r = client.post("/api/chats", headers=auth, json={"project": "workspace", "provider": "codex", "mode": "edit"})
+        assert r.status_code == 400
+        assert "Codex isn't signed in on the computer" in r.text
+
+
+def test_codex_default_model_is_passed_when_chat_model_is_default(env, calls, monkeypatch):
+    from agents_dialpad.providers import codex
+    monkeypatch.setenv("FAKE_CODEX_LOGIN", "signed_in")
+    monkeypatch.setattr(codex, "_status_cache", None)
+    client, auth = env(codex_default_model="gpt-5.1-custom")
+    with client:
+        r = client.post("/api/chats", headers=auth, json={"project": "workspace", "provider": "codex", "mode": "edit"})
+        assert r.status_code == 200
+        chat_id = r.json()["id"]
+
+        r2 = client.post(f"/api/chats/{chat_id}/messages", headers=auth, json={"text": "Hello"})
+        assert r2.status_code == 202
+        wait_until_idle(client, auth, chat_id)
+
+        # Verify -m gpt-5.1-custom was passed
+        c = next(c for c in calls() if c.get("prompt") == "Hello")
+        assert "-m" in c["argv"]
+        idx = c["argv"].index("-m")
+        assert c["argv"][idx + 1] == "gpt-5.1-custom"
+
+
+def test_codex_error_text_maps_known_errors():
+    from agents_dialpad.providers.codex import codex_error_text
+    table = [
+        (
+            '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'gpt-6.1-sol\' model is not supported when using Codex with a ChatGPT account.","code":"model_not_found"}}',
+            "Your Codex account can't use the model 'gpt-6.1-sol'. Pick another model, or set `codex_default_model` in config.json.",
+            "change_model",
+        ),
+        (
+            '{"error":{"message":"The requested model is not supported"}}',
+            "Your Codex account can't use this model. Pick another model, or set `codex_default_model` in config.json.",
+            "change_model",
+        ),
+        (
+            '{"status":401,"error":{"message":"Unauthorized: not logged in"}}',
+            "Codex isn't signed in on the computer. Run `codex login` there.",
+            None,
+        ),
+        (
+            '{"status":429,"error":{"message":"usage limit exceeded"}}',
+            "Codex usage limit reached. Try again later or use another agent.",
+            None,
+        ),
+        (
+            'Your OpenAI subscription does not include Codex. Please upgrade your plan.',
+            "Your OpenAI account doesn't include Codex. Use a plan that includes it, or sign in with an API key (`codex login --with-api-key`).",
+            None,
+        ),
+        (
+            '{"error":{"message":"Internal server error occurred"}}',
+            "Internal server error occurred",
+            None,
+        ),
+        (
+            'Random unparsed error string without json',
+            'Random unparsed error string without json',
+            None,
+        ),
+    ]
+
+    for raw, expected_msg, expected_action in table:
+        msg, act = codex_error_text(raw)
+        assert msg == expected_msg, f"Expected {expected_msg}, got {msg} for {raw}"
+        assert act == expected_action, f"Expected {expected_action}, got {act} for {raw}"
+
+
+def test_model_not_found_error_has_change_model_action(env, monkeypatch):
+    from agents_dialpad.providers import codex
+    monkeypatch.setenv("FAKE_CODEX_LOGIN", "signed_in")
+    monkeypatch.setattr(codex, "_status_cache", None)
+    client, auth = env()
+    with client:
+        chat_id = new_chat(client, auth, provider="codex", mode="edit")
+        events = turn(client, auth, chat_id, "MODEL_NOT_ALLOWED")
+
+        error_evs = [ev for ev in events if ev.get("type") == "error"]
+        assert len(error_evs) >= 1
+        err = error_evs[0]
+        assert err.get("action") == "change_model"
+        assert "gpt-6.1-sol" in err.get("message", "")
+
+        done_evs = [ev for ev in events if ev.get("type") == "done"]
+        assert len(done_evs) >= 1
+        done = done_evs[0]
+        assert done.get("is_error") is True
+        assert done.get("action") == "change_model"
+
+
+def test_unknown_disabled_agent_names_are_reported_by_doctor(env, monkeypatch):
+    from agents_dialpad import doctor as doctor_mod
+    monkeypatch.setenv("AG_CLAUDE", sys.executable)
+    monkeypatch.setattr(doctor_mod, "tailscale_checks", lambda port: [])
+    client, auth = env(disabled_agents=["codex", "ghost_agent"])
+
+    checks = doctor_mod.run_checks()
+    ghost_check = next((c for c in checks if c.label == "Disabled agent" and "ghost_agent" in c.detail), None)
+    assert ghost_check is not None
+    assert ghost_check.level == "warn"
+
+    codex_check = next((c for c in checks if "Codex" in c.label), None)
+    assert codex_check is not None
+    assert "turned off in config.json" in codex_check.detail

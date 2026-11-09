@@ -139,6 +139,11 @@ class ClaudeProvider:
     def available(self) -> bool:
         return _exe() is not None
 
+    async def status(self) -> dict:
+        if not self.available():
+            return {"state": "not_installed", "note": "not installed"}
+        return {"state": "ready", "note": ""}
+
     async def models(self) -> list[dict]:
         return self.MODELS
 
