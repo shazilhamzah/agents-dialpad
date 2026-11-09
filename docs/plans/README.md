@@ -77,8 +77,8 @@ Tips for the person supervising:
 - [x] B4 Uploads
 - [x] B5 Device tokens
 - [ ] C1 Approvals (spike → Claude → Antigravity)
-- [ ] C2 Codex
-- [ ] C3 Usage and alerts
-- [ ] C4 Scheduled prompts
-- [ ] C5 Compare agents
-- [ ] C6 Per-project instructions
+- [x] C2 Codex
+- [x] C3 Usage and alerts
+- [x] C4 Scheduled prompts
+- [x] C5 Compare agents
+- [x] C6 Per-project instructions
