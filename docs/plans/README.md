@@ -94,4 +94,4 @@ Tips for the person supervising:
 - [x] D2 Full command on approval cards
 - [x] D3 Codex readiness
 - [x] D4 Allow / Deny from the notification
-- [ ] D5 App lock (spike → feature)
+- [x] D5 App lock (spike → feature)

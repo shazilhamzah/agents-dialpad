@@ -202,9 +202,39 @@ def cmd_device(args) -> int:
         if not dev_id:
             raise SystemExit("device revoke needs an ID")
         if devs.revoke(dev_id):
+            from .applock import LockStore
+            LockStore(config.DATA / "lock.json").reset(dev_id)
             print(f"Device {dev_id} revoked.")
         else:
             raise SystemExit(f"No device found with id {dev_id}")
+        return 0
+    return 0
+
+
+def cmd_lock(args) -> int:
+    from .applock import LockStore
+
+    store = LockStore(config.DATA / "lock.json")
+    if args.action == "status":
+        creds = store.list()
+        if not creds:
+            print("No passkeys registered.")
+            return 0
+        by_who: dict[str, list[dict]] = {}
+        for c in creds:
+            by_who.setdefault(c.get("who", "unknown"), []).append(c)
+        for who, items in by_who.items():
+            print(f"{who}: {len(items)} passkey(s)")
+            for item in items:
+                print(f"  - {item.get('name', 'Passkey')} (id: {item.get('credential_id', '')[:12]}..., rp: {item.get('rp_id', '')})")
+        return 0
+    if args.action == "reset":
+        target = getattr(args, "device", None)
+        count = store.reset(target)
+        if target:
+            print(f"Removed {count} passkey(s) for device {target}.")
+        else:
+            print(f"Removed {count} passkey(s) (all identities reset).")
         return 0
     return 0
 
@@ -308,10 +338,17 @@ def build_parser() -> argparse.ArgumentParser:
     dev.add_argument("--no-qr", action="store_true", help="print only the link, no terminal QR")
     dev.add_argument("--png", metavar="FILE", help="also save the QR code as a PNG file")
     dev.set_defaults(func=cmd_device)
+
+    lk = sub.add_parser("lock", help="manage passkeys / app lock")
+    lk_sub = lk.add_subparsers(dest="action", required=True)
+    lk_sub.add_parser("status", help="list identities with passkeys")
+    lk_res = lk_sub.add_parser("reset", help="remove registered passkeys")
+    lk_res.add_argument("--device", help="device ID to reset (default: all)")
+    lk.set_defaults(func=cmd_lock)
     return p
 
 
-COMMANDS = {"serve", "init", "project", "token", "pair", "doctor", "autostart", "device"}
+COMMANDS = {"serve", "init", "project", "token", "pair", "doctor", "autostart", "device", "lock"}
 
 
 def main(argv: list[str] | None = None) -> int:

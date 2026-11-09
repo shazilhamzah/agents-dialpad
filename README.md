@@ -39,7 +39,7 @@ Dialpad, Inc. "Claude Code", "Antigravity" and other product names belong to the
 ## Install and run
 
 ```bash
-uv tool install git+https://github.com/shazilhamzah/agents-dialpad   # installs the `agents-dialpad` command
+uv tool install 'agents-dialpad[push,lock]' --from git+https://github.com/shazilhamzah/agents-dialpad   # installs the `agents-dialpad` command
 agents-dialpad init       # creates the data folder; asks which project folders the phone may use
 agents-dialpad doctor     # checks your agent CLIs, config and Tailscale, and tells you what to fix
 agents-dialpad serve      # starts it and prints a link
@@ -65,6 +65,7 @@ git clone https://github.com/shazilhamzah/agents-dialpad.git && cd agents-dialpa
 | `agents-dialpad token [--rotate]` | Show the access token (and the link for a device), or replace it. |
 | `agents-dialpad pair [--png FILE]` | Print a QR code (and link) to connect a phone without typing the URL. |
 | `agents-dialpad device add|list|revoke` | Manage revocable per-device tokens. |
+| `agents-dialpad lock status|reset [--device ID]` | Manage passkeys / app lock (list registered passkeys or reset lock for an identity or all). |
 | `agents-dialpad doctor` | Check Python, config, agent CLIs, the port and Tailscale. Exit code 1 if something blocks you. |
 | `agents-dialpad autostart install\|uninstall\|status` | Start automatically at login (below). `--dry-run` shows what would change. |
 
@@ -130,6 +131,7 @@ Everything lives in `config.json` in the data folder (see [`config.example.json`
 | `codex_models` | List of model names to offer for Codex chats (default `[]` offers "Default"). |
 | `codex_default_model` | Model string to use for Codex chats when "Default" is selected (e.g. `"gpt-5.1-custom"`). Default `""` (uses Codex's configured model). |
 | `disabled_agents` | List of agent names to hide completely (e.g. `["codex"]`). Existing chats open read-only. Default `[]`. |
+| `app_lock_idle_minutes` | Inactivity minutes before an unlocked session expires and the app locks again (default 5). |
 
 ### Access token
 
@@ -258,6 +260,33 @@ Each phone or tablet can have its own revocable token:
 - **Add a device:** In the web app on your computer, open **More → Devices → Add a device**, or run `agents-dialpad device add "My Phone"` (or `agents-dialpad pair --device "My Phone"`).
 - **Revoke a device:** In the Devices menu on your computer (or via `agents-dialpad device revoke <id>`), tap **Revoke**. That device is signed out immediately, even while the server is running, and its phone stops getting notifications.
 - **Migration advice:** After pairing your phones as individual devices, run `agents-dialpad token --rotate` on the computer. The old shared token stops working, while individual devices continue uninterrupted.
+
+## App lock
+
+You can lock the app on your phone with Face ID, Touch ID, or fingerprint (WebAuthn passkeys):
+
+1. On your phone (opened via Tailscale HTTPS or localhost), tap **More → App lock**.
+2. Tap **Turn on** and follow your device's biometric prompt.
+3. From then on, opening the app or returning to it after `app_lock_idle_minutes` (default 5) displays a full-screen lock screen requiring an **Unlock**.
+
+### What it protects and what it does not
+- Until unlocked, **the server refuses every API call from that phone with HTTP 423 Locked** (except `/api/info` to display the app shell and `/api/lock/*` for unlocking).
+- Unlock session tokens live in server memory only, expire after idle time, and are never written to disk or logs.
+- When App lock is active on a device, push notification action buttons (Allow/Deny) are omitted so commands cannot be authorized from the lock screen without unlocking.
+
+### Addresses supported
+WebAuthn passkeys require a secure context (HTTPS or localhost). Tailscale Serve HTTPS (`<user>.<tailscale>.ts.net`) and desktop localhost work out of the box. Plain-HTTP LAN addresses cannot use App lock.
+
+### Recovery
+If you lose your phone or passkey, you can reset locks at any time from your computer without needing the passkey:
+```bash
+# Reset all devices and owner passkeys
+agents-dialpad lock reset
+
+# Or reset a specific device
+agents-dialpad lock reset --device <device-id>
+```
+Revoking a device via `agents-dialpad device revoke <device-id>` (or from the Devices UI) also automatically removes that device's passkeys.
 
 ## Attachments
 

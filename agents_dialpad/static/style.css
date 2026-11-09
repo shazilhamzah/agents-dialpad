@@ -595,3 +595,75 @@ dialog.sheet.wide { width: min(94vw, 60rem); }
 .device-seen { font-size: .8125rem; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .this-tag { color: var(--accent-text); font-weight: normal; font-size: .8125rem; }
 .btn-sm { padding: 4px 10px; font-size: .8125rem; min-height: 36px; }
+
+/* lock screen overlay */
+.lock-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.lock-overlay[hidden] {
+  display: none !important;
+}
+.lock-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 16px;
+  max-width: 320px;
+  width: 100%;
+}
+.lock-card .lock-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 18px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+.lock-card h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.lock-card .lock-msg {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 0.9375rem;
+  line-height: 1.4;
+}
+#btn-unlock {
+  min-height: 48px;
+  width: 100%;
+  font-size: 1rem;
+  font-weight: 600;
+  margin-top: 8px;
+}
+
+/* app lock passkey item */
+.lock-cred-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.lock-cred-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.lock-cred-name {
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+.lock-cred-meta {
+  color: var(--text-3);
+  font-size: 0.8125rem;
+}

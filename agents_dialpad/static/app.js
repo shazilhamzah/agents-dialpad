@@ -42,6 +42,7 @@ const ICON = {
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
   phone: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[n]}</svg>`;
 
@@ -59,9 +60,31 @@ let token = LS.get('ag_token');
 }
 class AuthError extends Error {}
 async function api(path, opts = {}) {
-  const headers = { Authorization: 'Bearer ' + token, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) };
+  const unlock = sessionStorage.getItem('ag_unlock');
+  const headers = {
+    Authorization: 'Bearer ' + token,
+    ...(unlock ? { 'X-Unlock': unlock } : {}),
+    ...(opts.headers || {}),
+    ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
+  };
   const r = await fetch('/api' + path, { ...opts, headers });
   if (r.status === 401) throw new AuthError();
+  if (r.status === 423) {
+    await promptUnlock();
+    const newUnlock = sessionStorage.getItem('ag_unlock');
+    const retryHeaders = {
+      ...headers,
+      ...(newUnlock ? { 'X-Unlock': newUnlock } : {}),
+    };
+    const r2 = await fetch('/api' + path, { ...opts, headers: retryHeaders });
+    if (r2.status === 401) throw new AuthError();
+    if (!r2.ok) {
+      let msg = r2.statusText;
+      try { msg = (await r2.json()).detail || msg; } catch { /* not json */ }
+      throw new Error(msg);
+    }
+    return r2;
+  }
   if (!r.ok) {
     let msg = r.statusText;
     try { msg = (await r.json()).detail || msg; } catch { /* not json */ }
@@ -71,8 +94,10 @@ async function api(path, opts = {}) {
 }
 const getJSON = async (p, o) => (await api(p, o)).json();
 async function uploadFile(chatId, file) {
+  const unlock = sessionStorage.getItem('ag_unlock');
   const headers = {
     Authorization: 'Bearer ' + token,
+    ...(unlock ? { 'X-Unlock': unlock } : {}),
     'Content-Type': file.type || 'application/octet-stream',
   };
   const r = await fetch('/api/chats/' + encodeURIComponent(chatId) + '/uploads?name=' + encodeURIComponent(file.name), {
@@ -81,6 +106,23 @@ async function uploadFile(chatId, file) {
     body: file,
   });
   if (r.status === 401) throw new AuthError();
+  if (r.status === 423) {
+    await promptUnlock();
+    const newUnlock = sessionStorage.getItem('ag_unlock');
+    if (newUnlock) headers['X-Unlock'] = newUnlock;
+    const r2 = await fetch('/api/chats/' + encodeURIComponent(chatId) + '/uploads?name=' + encodeURIComponent(file.name), {
+      method: 'PUT',
+      headers,
+      body: file,
+    });
+    if (r2.status === 401) throw new AuthError();
+    if (!r2.ok) {
+      let msg = r2.statusText;
+      try { msg = (await r2.json()).detail || msg; } catch { /* not json */ }
+      throw new Error(msg);
+    }
+    return r2.json();
+  }
   if (!r.ok) {
     let msg = r.statusText;
     try { msg = (await r.json()).detail || msg; } catch { /* not json */ }
@@ -92,7 +134,19 @@ const postJSON = async (p, b) => (await api(p, { method: 'POST', body: JSON.stri
 function forgetToken() { LS.del('ag_token'); token = null; }
 
 /* ===================== state ===================== */
-const state = { chats: [], sig: '', info: null, drafts: {}, openTools: new Set(), expandedApprovals: new Set(), query: '', quick: {} };
+const state = {
+  chats: [],
+  sig: '',
+  info: null,
+  drafts: {},
+  openTools: new Set(),
+  expandedApprovals: new Set(),
+  query: '',
+  quick: {},
+  lockEnabled: false,
+  lockIdleMinutes: 5,
+  lockChecked: false,
+};
 let cur = null;           // the open chat view (see createChatView)
 
 /* ===================== sheets, menu, confirm ===================== */
@@ -216,6 +270,7 @@ function mountShell() {
     </aside>
     <main class="pane" id="pane"></main>
   </div>`;
+  ensureLockOverlay();
   $('#btn-sched').onclick = openSchedules;
   $('#btn-limits').onclick = openLimits;
   $('#btn-side-more').onclick = (e) => { if ($('#menu')) return closeMenu(); openMenu(e.currentTarget, sideMenuItems()); };
@@ -327,6 +382,7 @@ function sideMenuItems() {
   const items = [
     { icon: 'qr', label: 'Pair a device', run: openPair },
     { icon: 'phone', label: 'Devices', run: openDevices },
+    { icon: 'lock', label: 'App lock', run: openAppLock },
   ];
   if (hasPush) {
     items.push({ icon: 'bell', label: 'Turn off notifications', run: disablePush });
@@ -444,6 +500,298 @@ async function openPair() {
     <div class="actions"><button class="btn secondary" type="button" id="pair-copy">Copy link</button><button class="btn" type="button" data-close>Done</button></div>`, 'Pair a device');
   $('[data-close]', dlg).onclick = () => dlg.close();
   $('#pair-copy', dlg).onclick = async () => { if (await copyText(data.url)) toast('Link copied'); };
+}
+
+/* ===================== app lock ===================== */
+function bufferToBase64url(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let str = '';
+  for (const char of bytes) str += String.fromCharCode(char);
+  return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function base64urlToBuffer(base64url) {
+  let b64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4) b64 += '=';
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function ensureLockOverlay() {
+  if ($('#lock-overlay')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'lock-overlay';
+  overlay.className = 'lock-overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', 'App locked');
+  overlay.setAttribute('hidden', '');
+  overlay.innerHTML = `
+    <div class="lock-card">
+      <img src="/icon-192.png" alt="" class="lock-icon" width="72" height="72">
+      <h2>Locked</h2>
+      <p class="lock-msg">Unlock to continue.</p>
+      <button id="btn-unlock" class="btn primary" type="button">Unlock</button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+let activeUnlockPromise = null;
+function promptUnlock() {
+  if (activeUnlockPromise) return activeUnlockPromise;
+  ensureLockOverlay();
+  const overlay = $('#lock-overlay');
+  overlay.removeAttribute('hidden');
+  const btn = $('#btn-unlock');
+  btn.focus();
+
+  activeUnlockPromise = new Promise((resolve) => {
+    async function doUnlock() {
+      try {
+        btn.disabled = true;
+        btn.textContent = 'Unlocking...';
+        const optsRes = await fetch('/api/lock/unlock/options', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (optsRes.status === 401) throw new AuthError();
+        if (optsRes.status === 429) {
+          toast('Too many failed attempts. Try again later.');
+          return;
+        }
+        if (!optsRes.ok) {
+          let err = optsRes.statusText;
+          try { err = (await optsRes.json()).detail || err; } catch {}
+          throw new Error(err);
+        }
+        const data = await optsRes.json();
+        const chalId = data.challenge_id;
+        const opts = data.options || data;
+        opts.challenge = base64urlToBuffer(opts.challenge);
+        if (opts.allowCredentials) {
+          opts.allowCredentials.forEach(c => c.id = base64urlToBuffer(c.id));
+        }
+
+        const assertion = await navigator.credentials.get({ publicKey: opts });
+        const assertionJSON = {
+          id: assertion.id,
+          rawId: bufferToBase64url(assertion.rawId),
+          type: assertion.type,
+          response: {
+            authenticatorData: bufferToBase64url(assertion.response.authenticatorData),
+            clientDataJSON: bufferToBase64url(assertion.response.clientDataJSON),
+            signature: bufferToBase64url(assertion.response.signature),
+            userHandle: assertion.response.userHandle ? bufferToBase64url(assertion.response.userHandle) : null,
+          },
+        };
+
+        const verRes = await fetch('/api/lock/unlock/verify', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ challenge_id: chalId, credential: assertionJSON }),
+        });
+        if (!verRes.ok) {
+          let err = verRes.statusText;
+          try { err = (await verRes.json()).detail || err; } catch {}
+          throw new Error(err);
+        }
+        const verData = await verRes.json();
+        if (verData.unlock) {
+          sessionStorage.setItem('ag_unlock', verData.unlock);
+          overlay.setAttribute('hidden', '');
+          resolve(verData.unlock);
+        }
+      } catch (e) {
+        if (e.name !== 'NotAllowedError') {
+          toast(e.message || 'Unlock failed');
+        }
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Unlock';
+      }
+    }
+    btn.onclick = doUnlock;
+  }).finally(() => {
+    activeUnlockPromise = null;
+  });
+  return activeUnlockPromise;
+}
+
+async function openAppLock() {
+  let status;
+  try {
+    status = await getJSON('/lock/status');
+    state.lockEnabled = !!status.enabled;
+    state.lockIdleMinutes = status.idle_minutes || 5;
+  } catch (e) {
+    return handleErr(e);
+  }
+
+  if (!status.available) {
+    const dlg = openSheet(`
+      <h2>App lock</h2>
+      <p class="lede">App lock needs the lock extra.</p>
+      <p>Install it on your computer:</p>
+      <pre style="background:var(--surface-2);padding:10px;border-radius:8px;font-size:0.875rem;overflow-x:auto"><code>uv tool install --upgrade 'agents-dialpad[lock]'</code></pre>
+      <div class="actions"><button class="btn" type="button" data-close>Done</button></div>
+    `, 'App lock');
+    $('[data-close]', dlg).onclick = () => dlg.close();
+    return;
+  }
+
+  if (status.secure_context_hint || !window.isSecureContext) {
+    const dlg = openSheet(`
+      <h2>App lock</h2>
+      <p class="lede">App lock needs the HTTPS address (Tailscale). Open the app from there.</p>
+      <div class="actions"><button class="btn" type="button" data-close>Done</button></div>
+    `, 'App lock');
+    $('[data-close]', dlg).onclick = () => dlg.close();
+    return;
+  }
+
+  if (!status.enabled) {
+    const dlg = openSheet(`
+      <h2>App lock</h2>
+      <p class="lede">Protect this device with Face ID, Touch ID or fingerprint. When turned on, the app locks after ${status.idle_minutes} minutes idle.</p>
+      <div class="actions">
+        <button class="btn secondary" type="button" data-close>Cancel</button>
+        <button class="btn primary" id="btn-lock-turn-on" type="button">Turn on</button>
+      </div>
+    `, 'App lock');
+    $('[data-close]', dlg).onclick = () => dlg.close();
+    $('#btn-lock-turn-on', dlg).onclick = async () => {
+      try {
+        const turnBtn = $('#btn-lock-turn-on', dlg);
+        turnBtn.disabled = true;
+        turnBtn.textContent = 'Registering...';
+        const optData = await postJSON('/lock/register/options', {
+          name: /iPhone|iPad|Macintosh/.test(navigator.userAgent) ? 'Apple Device' : /Android/.test(navigator.userAgent) ? 'Android Device' : 'Passkey',
+        });
+        const chalId = optData.challenge_id;
+        const opts = optData.options || optData;
+        opts.challenge = base64urlToBuffer(opts.challenge);
+        opts.user.id = base64urlToBuffer(opts.user.id);
+        if (opts.excludeCredentials) {
+          opts.excludeCredentials.forEach(c => c.id = base64urlToBuffer(c.id));
+        }
+
+        const cred = await navigator.credentials.create({ publicKey: opts });
+        const credJSON = {
+          id: cred.id,
+          rawId: bufferToBase64url(cred.rawId),
+          type: cred.type,
+          response: {
+            attestationObject: bufferToBase64url(cred.response.attestationObject),
+            clientDataJSON: bufferToBase64url(cred.response.clientDataJSON),
+          },
+        };
+
+        const verData = await postJSON('/lock/register/verify', {
+          challenge_id: chalId,
+          credential: credJSON,
+        });
+        if (verData.unlock) {
+          sessionStorage.setItem('ag_unlock', verData.unlock);
+        }
+        state.lockEnabled = true;
+        toast('App lock turned on');
+        dlg.close();
+        openAppLock();
+      } catch (err) {
+        if (err.name !== 'NotAllowedError') {
+          toast(err.message || 'Registration failed');
+        }
+        dlg.close();
+      }
+    };
+    return;
+  }
+
+  // Lock is enabled
+  const credsHtml = (status.credentials || []).map(c => `
+    <div class="lock-cred-item">
+      <div class="lock-cred-info">
+        <span class="lock-cred-name">${esc(c.name || 'Passkey')}</span>
+        <span class="lock-cred-meta">Added ${timeAgo(c.created)}</span>
+      </div>
+      <button class="btn secondary sm" data-remove-cred="${esc(c.id)}" type="button">Remove</button>
+    </div>
+  `).join('');
+
+  const dlg = openSheet(`
+    <h2>App lock</h2>
+    <p class="lede">App lock is on. Locks after ${status.idle_minutes} minutes idle.</p>
+    <div class="lock-creds-list">${credsHtml}</div>
+    <div class="actions" style="margin-top:16px;">
+      <button class="btn secondary" id="btn-lock-add" type="button">Add passkey</button>
+      <button class="btn" type="button" data-close>Done</button>
+    </div>
+  `, 'App lock');
+  $('[data-close]', dlg).onclick = () => dlg.close();
+
+  $('#btn-lock-add', dlg).onclick = async () => {
+    try {
+      const addBtn = $('#btn-lock-add', dlg);
+      addBtn.disabled = true;
+      addBtn.textContent = 'Registering...';
+      const optData = await postJSON('/lock/register/options', {
+        name: /iPhone|iPad|Macintosh/.test(navigator.userAgent) ? 'Apple Device' : /Android/.test(navigator.userAgent) ? 'Android Device' : 'Passkey',
+      });
+      const chalId = optData.challenge_id;
+      const opts = optData.options || optData;
+      opts.challenge = base64urlToBuffer(opts.challenge);
+      opts.user.id = base64urlToBuffer(opts.user.id);
+      if (opts.excludeCredentials) {
+        opts.excludeCredentials.forEach(c => c.id = base64urlToBuffer(c.id));
+      }
+
+      const cred = await navigator.credentials.create({ publicKey: opts });
+      const credJSON = {
+        id: cred.id,
+        rawId: bufferToBase64url(cred.rawId),
+        type: cred.type,
+        response: {
+          attestationObject: bufferToBase64url(cred.response.attestationObject),
+          clientDataJSON: bufferToBase64url(cred.response.clientDataJSON),
+        },
+      };
+
+      const verData = await postJSON('/lock/register/verify', {
+        challenge_id: chalId,
+        credential: credJSON,
+      });
+      if (verData.unlock) {
+        sessionStorage.setItem('ag_unlock', verData.unlock);
+      }
+      toast('Passkey added');
+      dlg.close();
+      openAppLock();
+    } catch (err) {
+      if (err.name !== 'NotAllowedError') {
+        toast(err.message || 'Registration failed');
+      }
+      dlg.close();
+    }
+  };
+
+  $$('[data-remove-cred]', dlg).forEach(btn => {
+    btn.onclick = async () => {
+      const cid = btn.dataset.removeCred;
+      if (!confirm('Remove this passkey?')) return;
+      try {
+        await api('/lock/credentials/' + encodeURIComponent(cid), { method: 'DELETE' });
+        toast('Passkey removed');
+        dlg.close();
+        openAppLock();
+      } catch (err) {
+        toast(err.message || 'Failed to remove passkey');
+      }
+    };
+  });
 }
 
 function renderList() {
@@ -1807,10 +2155,42 @@ if (window.visualViewport) {
   vv.addEventListener('resize', sync); vv.addEventListener('scroll', sync); sync();
 }
 
+/* ---- lock again when app has been hidden for longer than lockIdleMinutes ---- */
+let appHiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    appHiddenAt = Date.now();
+  } else if (document.visibilityState === 'visible') {
+    if (appHiddenAt > 0 && state.lockIdleMinutes) {
+      const elapsedSec = (Date.now() - appHiddenAt) / 1000;
+      if (elapsedSec >= state.lockIdleMinutes * 60) {
+        sessionStorage.removeItem('ag_unlock');
+        if (token) {
+          fetch('/api/lock/lock', { method: 'POST', headers: { Authorization: 'Bearer ' + token } }).catch(() => {});
+        }
+        if (state.lockEnabled) {
+          promptUnlock();
+        }
+      }
+    }
+    appHiddenAt = 0;
+  }
+});
+
 /* ===================== routing ===================== */
 async function route() {
   if (!token) return showLogin();
   mountShell();
+  if (!state.lockChecked) {
+    state.lockChecked = true;
+    getJSON('/lock/status').then((lk) => {
+      state.lockEnabled = !!lk.enabled;
+      state.lockIdleMinutes = lk.idle_minutes || 5;
+      if (state.lockEnabled && !sessionStorage.getItem('ag_unlock')) {
+        promptUnlock();
+      }
+    }).catch(() => {});
+  }
   const shell = $('.shell');
   const mc = location.hash.match(/^#\/c\/([0-9a-f]{32})(?:\?(.*))?$/);
   if (mc) {
