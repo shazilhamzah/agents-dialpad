@@ -544,9 +544,14 @@ function promptUnlock() {
   if (activeUnlockPromise) return activeUnlockPromise;
   ensureLockOverlay();
   const overlay = $('#lock-overlay');
+  document.body.classList.add('is-locked');
   overlay.removeAttribute('hidden');
   const btn = $('#btn-unlock');
-  btn.focus();
+  try {
+    if (window.matchMedia && !window.matchMedia('(pointer: coarse)').matches) {
+      btn.focus({ focusVisible: false });
+    }
+  } catch {}
 
   activeUnlockPromise = new Promise((resolve) => {
     async function doUnlock() {
@@ -602,6 +607,7 @@ function promptUnlock() {
         const verData = await verRes.json();
         if (verData.unlock) {
           sessionStorage.setItem('ag_unlock', verData.unlock);
+          document.body.classList.remove('is-locked');
           overlay.setAttribute('hidden', '');
           resolve(verData.unlock);
         }
@@ -627,6 +633,11 @@ async function openAppLock() {
     status = await getJSON('/lock/status');
     state.lockEnabled = !!status.enabled;
     state.lockIdleMinutes = status.idle_minutes || 5;
+    if (state.lockEnabled) {
+      try { localStorage.setItem('ag_lock_enabled', '1'); } catch {}
+    } else {
+      try { localStorage.removeItem('ag_lock_enabled'); } catch {}
+    }
   } catch (e) {
     return handleErr(e);
   }
@@ -1018,49 +1029,9 @@ async function openModelPicker() {
   };
 }
 
-function formatTokens(n) {
-  if (!n) return '';
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M tokens';
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'k tokens';
-  return n + ' tokens';
-}
-
-function usageHTML(usageData) {
-  if (!usageData || !usageData.days || !usageData.days.length) return '';
-  const byDate = {};
-  let maxReplies = 1;
-  for (const item of usageData.days) {
-    if (!byDate[item.date]) byDate[item.date] = { date: item.date, providers: {}, totalReplies: 0, totalTokens: 0 };
-    byDate[item.date].providers[item.provider] = item;
-    byDate[item.date].totalReplies += item.replies || 0;
-    byDate[item.date].totalTokens += (item.input_tokens || 0) + (item.output_tokens || 0);
-    if (byDate[item.date].totalReplies > maxReplies) maxReplies = byDate[item.date].totalReplies;
-  }
-  const dates = Object.keys(byDate).sort();
-  if (!dates.length) return '';
-  const rows = dates.map((d) => {
-    const entry = byDate[d];
-    const parts = d.split('-');
-    const dt = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
-    const dayStr = dt.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
-    const bars = Object.entries(entry.providers).map(([p, data]) => {
-      if (!data.replies) return '';
-      const pct = Math.max(4, Math.round((data.replies / maxReplies) * 100));
-      return `<div class="usage-bar usage-bar-${esc(p)}" style="width:${pct}%" title="${esc(p)}: ${data.replies}"></div>`;
-    }).join('');
-    const tok = formatTokens(entry.totalTokens);
-    return `<div class="usage-row">
-      <div class="usage-head"><span class="usage-date">${esc(dayStr)}</span>
-      <span class="usage-stats"><span>${entry.totalReplies} ${entry.totalReplies === 1 ? 'reply' : 'replies'}</span>${tok ? ` · ${esc(tok)}` : ''}</span></div>
-      <div class="usage-track">${bars}</div>
-    </div>`;
-  }).join('');
-  return `<section class="lim-sec"><h3>Last 7 days</h3>${rows}</section>`;
-}
-
-function limitsHTML(data, usageData) {
-  if (!data.providers.length && (!usageData || !usageData.days || !usageData.days.length)) return '<p class="note">No agents available.</p>';
-  const lims = data.providers.map((p) => {
+function limitsHTML(data) {
+  if (!data || !data.providers || !data.providers.length) return '<p class="note">No agents available.</p>';
+  return data.providers.map((p) => {
     const rows = p.rows.map((r) => {
       const cls = r.remaining < 15 ? 'low' : r.remaining < 40 ? 'mid' : '';
       const name = r.group === p.label ? r.label : `${r.group} · ${r.label}`;   // don't repeat the section heading
@@ -1070,7 +1041,6 @@ function limitsHTML(data, usageData) {
     }).join('');
     return `<section class="lim-sec"><h3>${esc(p.label)}</h3>${rows || `<p class="note">${esc(p.note || 'No data.')}</p>`}</section>`;
   }).join('');
-  return lims + usageHTML(usageData);
 }
 async function openLimits(force) {
   let dlg = $('#ldlg');
@@ -1082,11 +1052,8 @@ async function openLimits(force) {
     $('#lrefresh', dlg).onclick = () => openLimits(true);
   } else $('#lbody', dlg).innerHTML = '<p class="note">Loading…</p>';
   try {
-    const [limitsData, usageData] = await Promise.all([
-      getJSON('/limits' + (force === true ? '?refresh=true' : '')),
-      getJSON('/usage?days=7').catch(() => ({ days: [] })),
-    ]);
-    $('#lbody', dlg).innerHTML = limitsHTML(limitsData, usageData);
+    const limitsData = await getJSON('/limits' + (force === true ? '?refresh=true' : ''));
+    $('#lbody', dlg).innerHTML = limitsHTML(limitsData);
   }
   catch (e) { dlg.close(); handleErr(e); }
 }
@@ -2180,17 +2147,27 @@ document.addEventListener('visibilitychange', () => {
 /* ===================== routing ===================== */
 async function route() {
   if (!token) return showLogin();
-  mountShell();
   if (!state.lockChecked) {
     state.lockChecked = true;
+    if (localStorage.getItem('ag_lock_enabled') === '1' && !sessionStorage.getItem('ag_unlock')) {
+      promptUnlock();
+    }
     getJSON('/lock/status').then((lk) => {
       state.lockEnabled = !!lk.enabled;
       state.lockIdleMinutes = lk.idle_minutes || 5;
-      if (state.lockEnabled && !sessionStorage.getItem('ag_unlock')) {
-        promptUnlock();
+      if (state.lockEnabled) {
+        try { localStorage.setItem('ag_lock_enabled', '1'); } catch {}
+        if (!sessionStorage.getItem('ag_unlock')) {
+          promptUnlock();
+        }
+      } else {
+        try { localStorage.removeItem('ag_lock_enabled'); } catch {}
+        document.body.classList.remove('is-locked');
+        $('#lock-overlay')?.setAttribute('hidden', '');
       }
     }).catch(() => {});
   }
+  mountShell();
   const shell = $('.shell');
   const mc = location.hash.match(/^#\/c\/([0-9a-f]{32})(?:\?(.*))?$/);
   if (mc) {

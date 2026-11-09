@@ -380,15 +380,6 @@ dialog.sheet::backdrop { background: var(--scrim); animation: fade-in 200ms var(
 .track i { display: block; height: 100%; border-radius: inherit; background: var(--ok); transition: width var(--t-sheet) var(--ease); }
 .track i.mid { background: #d28a00; } .track i.low { background: var(--danger); }
 .lim small { color: var(--text-3); font-size: .8125rem; font-variant-numeric: tabular-nums; }
-.usage-row { margin-bottom: 10px; }
-.usage-head { display: flex; justify-content: space-between; align-items: baseline; font-size: .8125rem; color: var(--text-2); margin-bottom: 3px; }
-.usage-date { font-weight: 600; color: var(--text); }
-.usage-stats { font-variant-numeric: tabular-nums; color: var(--text-3); }
-.usage-track { height: 8px; border-radius: 999px; background: var(--surface-2); display: flex; overflow: hidden; gap: 2px; }
-.usage-bar { height: 100%; border-radius: inherit; }
-.usage-bar-claude { background: var(--bar-1); }
-.usage-bar-antigravity { background: var(--bar-2); }
-.usage-bar-codex { background: var(--bar-3); }
 .sched-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); gap: 12px; }
 .sched-info { min-width: 0; flex: 1; }
 .sched-name { font-weight: 600; font-size: .9375rem; margin-bottom: 2px; }
@@ -601,14 +592,20 @@ dialog.sheet.wide { width: min(94vw, 60rem); }
   position: fixed;
   inset: 0;
   z-index: 99999;
-  background: var(--bg);
+  background: var(--canvas);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 .lock-overlay[hidden] {
   display: none !important;
+}
+body.is-locked .shell,
+body.is-locked dialog {
+  visibility: hidden !important;
 }
 .lock-card {
   display: flex;
@@ -622,12 +619,15 @@ dialog.sheet.wide { width: min(94vw, 60rem); }
 .lock-card .lock-icon {
   width: 72px;
   height: 72px;
+  display: block;
+  user-select: none;
 }
 .lock-card h2 {
   margin: 0;
   font-size: 1.5rem;
   font-weight: 700;
   letter-spacing: -0.02em;
+  color: var(--text);
 }
 .lock-card .lock-msg {
   margin: 0;
@@ -641,6 +641,9 @@ dialog.sheet.wide { width: min(94vw, 60rem); }
   font-size: 1rem;
   font-weight: 600;
   margin-top: 8px;
+}
+#btn-unlock:focus:not(:focus-visible) {
+  outline: none;
 }
 
 /* app lock passkey item */
