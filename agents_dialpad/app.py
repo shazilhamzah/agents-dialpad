@@ -679,11 +679,12 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         chat_or_404(chat_id)
         if not REQ_ID_RE.match(req_id):
             raise HTTPException(400, "Invalid request ID")
+        latest = runs.runs.get(chat_id)
+        if latest and req_id in latest.decided:  # also after the reply finished (a second tap, another device)
+            raise HTTPException(409, "Approval request was already decided")
         run = runs.active(chat_id)
         if not run:
             raise HTTPException(404, "No active run for this chat")
-        if req_id in run.decided:
-            raise HTTPException(409, "Approval request was already decided")
         if req_id not in run.pending:
             raise HTTPException(404, "Unknown approval request")
         run.decide(req_id, body.allow)
