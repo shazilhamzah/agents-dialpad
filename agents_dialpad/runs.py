@@ -100,7 +100,7 @@ class RunManager:
         self,
         store: Store,
         projects: dict[str, str],
-        get_instructions=lambda: "",
+        get_instructions=lambda project=None: "",
         allow_full=lambda: False,
         keep_awake: KeepAwake | None = None,
         on_finish=None,
@@ -169,7 +169,8 @@ class RunManager:
             # If full access was switched off in config.json, old "full" chats quietly drop to "can edit".
             effective = chat if (chat.get("mode") != "full" or self.allow_full()) else {**chat, "mode": "edit"}
             async for ev in provider.stream(
-                effective, text, cwd, run, self.get_instructions(), add_dirs=add_dirs, approval_timeout=self.approval_timeout()
+                effective, text, cwd, run, self.get_instructions(chat.get("project")),
+                add_dirs=add_dirs, approval_timeout=self.approval_timeout(),
             ):
                 if ev["type"] == "session" and ev.get("session_id"):
                     chat["session_id"] = ev["session_id"]

@@ -90,3 +90,62 @@ def test_store_rejects_ids_that_are_not_32_hex_chars(tmp_path, bad):
     with pytest.raises(KeyError):
         s.get(bad)
     assert s.exists(bad) is False
+
+
+# --------------------------------------------------------------------------- C6 project instructions
+def test_project_objects_are_normalised_to_paths(data_dir):
+    config.load()
+    (data_dir / "config.json").write_text(json.dumps({
+        "projects": {
+            "p1": "workspace",
+            "p2": {"path": "workspace", "instructions_file": "custom.md"},
+        }
+    }))
+    cfg, _ = config.load()
+    assert isinstance(cfg["projects"]["p1"], str)
+    assert isinstance(cfg["projects"]["p2"], str)
+    assert cfg["projects"]["p2"] == str(data_dir / "workspace")
+    assert cfg["_project_instructions"]["p2"] == "custom.md"
+
+
+def test_project_instructions_follow_the_global_ones(tmp_path):
+    g = tmp_path / "global.md"
+    g.write_text("global text")
+    p = tmp_path / "proj.md"
+    p.write_text("project text")
+
+    cfg = {
+        "instructions_file": str(g),
+        "_project_instructions": {"my-app": str(p)},
+    }
+    # Combined with blank line
+    assert config.read_instructions(cfg, "my-app") == "global text\n\nproject text"
+    # Project without instructions gets only global
+    assert config.read_instructions(cfg, "other") == "global text"
+    # No project passed gets only global
+    assert config.read_instructions(cfg) == "global text"
+
+
+def test_missing_project_instructions_are_ignored(tmp_path):
+    g = tmp_path / "global.md"
+    g.write_text("global text")
+    cfg = {
+        "instructions_file": str(g),
+        "_project_instructions": {"my-app": str(tmp_path / "nonexistent.md")},
+    }
+    assert config.read_instructions(cfg, "my-app") == "global text"
+
+
+def test_projects_without_a_path_are_reported(data_dir):
+    config.load()
+    (data_dir / "config.json").write_text(json.dumps({
+        "projects": {
+            "bad": {"instructions_file": "custom.md"},
+            "good": "workspace",
+        }
+    }))
+    cfg, _ = config.load()
+    assert "bad" not in cfg["projects"]
+    assert "good" in cfg["projects"]
+    assert "bad" in cfg["_invalid_projects"]
+

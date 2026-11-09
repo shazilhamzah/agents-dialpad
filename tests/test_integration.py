@@ -1474,4 +1474,29 @@ def test_unknown_group_is_404(env):
         assert client.delete("/api/groups/00000000", headers=h).status_code == 404
 
 
+# --------------------------------------------------------------------------- C6 project instructions
+def test_per_project_instructions_integration(env, calls, tmp_path):
+    (tmp_path / "global.md").write_text("Global rules.", encoding="utf-8")
+    (tmp_path / "proj.md").write_text("Project specific rules.", encoding="utf-8")
+    (tmp_path / "app").mkdir()
+    projects = {
+        "workspace": str(tmp_path / "ws"),
+        "my-app": {"path": str(tmp_path / "app"), "instructions_file": str(tmp_path / "proj.md")},
+    }
+    client, h = env(instructions_file=str(tmp_path / "global.md"), projects=projects)
+    with client:
+        # Chat in my-app project gets global + project instructions
+        r = client.post("/api/chats", headers=h, json={"provider": "claude", "project": "my-app", "mode": "readonly"})
+        assert r.status_code == 200
+        cid_app = r.json()["id"]
+        info_app = reply_info(turn(client, h, cid_app, "x"))
+        assert info_app["system"] == "Global rules.\n\nProject specific rules."
+
+        # Chat in workspace project gets only global instructions
+        cid_ws = new_chat(client, h)
+        info_ws = reply_info(turn(client, h, cid_ws, "x"))
+        assert info_ws["system"] == "Global rules."
+
+
+
 

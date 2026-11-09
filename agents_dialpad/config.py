@@ -86,8 +86,31 @@ def load() -> tuple[dict, str]:
     cfg.setdefault("host", "127.0.0.1")
     cfg.setdefault("port", 8787)
     cfg.setdefault("projects", {"workspace": "workspace"})
-    # Relative project paths are relative to the data folder, so moving it doesn't break them.
-    cfg["projects"] = {name: str(p if (p := Path(raw)).is_absolute() else DATA / p) for name, raw in cfg["projects"].items()}
+    raw_projects = cfg.get("projects") or {}
+    norm_projects: dict[str, str] = {}
+    proj_instructions: dict[str, str] = {}
+    invalid_projects: list[str] = []
+
+    for name, val in raw_projects.items():
+        if isinstance(val, dict):
+            raw_path = val.get("path")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                invalid_projects.append(name)
+                continue
+            p = Path(raw_path)
+            norm_projects[name] = str(p if p.is_absolute() else DATA / p)
+            inst = val.get("instructions_file")
+            if inst and isinstance(inst, str) and inst.strip():
+                proj_instructions[name] = inst.strip()
+        elif isinstance(val, str):
+            p = Path(val)
+            norm_projects[name] = str(p if p.is_absolute() else DATA / p)
+        else:
+            invalid_projects.append(name)
+
+    cfg["projects"] = norm_projects
+    cfg["_project_instructions"] = proj_instructions
+    cfg["_invalid_projects"] = invalid_projects
     # Optional text file added to every conversation (none by default). Example: "instructions/caveman.md".
     cfg.setdefault("instructions_file", None)
     cfg.setdefault("keep_awake", True)
@@ -142,12 +165,26 @@ def resolve_instructions_path(name: str) -> Path:
     return DATA / p
 
 
-def read_instructions(cfg: dict) -> str:
+def read_instructions(cfg: dict, project: str | None = None) -> str:
     """Read fresh on every turn so edits apply without a restart."""
-    name = cfg.get("instructions_file")
-    if not name:
-        return ""
-    try:
-        return resolve_instructions_path(name).read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
+    parts = []
+    global_file = cfg.get("instructions_file")
+    if global_file:
+        try:
+            txt = resolve_instructions_path(global_file).read_text(encoding="utf-8").strip()
+            if txt:
+                parts.append(txt)
+        except OSError:
+            pass
+
+    if project:
+        proj_inst = (cfg.get("_project_instructions") or {}).get(project)
+        if proj_inst:
+            try:
+                txt = resolve_instructions_path(proj_inst).read_text(encoding="utf-8").strip()
+                if txt:
+                    parts.append(txt)
+            except OSError:
+                pass
+
+    return "\n\n".join(parts)

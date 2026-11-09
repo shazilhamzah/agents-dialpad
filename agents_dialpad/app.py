@@ -133,7 +133,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
     runs = RunManager(
         store,
         cfg["projects"],
-        lambda: config.read_instructions(cfg),
+        lambda project=None: config.read_instructions(cfg, project),
         lambda: bool(cfg.get("allow_full_access")),
         keep_awake=keep_awake,
         on_finish=notify,

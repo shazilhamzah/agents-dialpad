@@ -118,7 +118,7 @@ Everything lives in `config.json` in the data folder (see [`config.example.json`
 | Key | Meaning |
 |---|---|
 | `host`, `port` | Listen address. Keep `127.0.0.1` and put a private-network proxy in front. |
-| `projects` | `name → folder`. The phone can only pick from this list, it can never type a path. Relative paths are relative to the data folder. Manage with `agents-dialpad project`. |
+| `projects` | `name → folder` path or object with `{"path": "...", "instructions_file": "..."}`. The phone can only pick from this list, it can never type a path. Relative paths are relative to the data folder. Manage with `agents-dialpad project`. |
 | `token` | Optional fixed access token (16+ characters). |
 | `instructions_file` | Optional text file added to every conversation. Default `null` (none). Re-read every turn. See below. |
 | `keep_awake` | Prevent idle sleep while an agent reply is running. Default `true`. |
@@ -146,6 +146,20 @@ shipped in the package) and its contents are added to every conversation (Claude
 Antigravity and Codex have no such flag, so it is prefixed to the first message with a short reminder after).
 `instructions/caveman.md` ships as an example: a terse-reply style condensed from the open-source "caveman" Claude skill.
 Enable it with `"instructions_file": "instructions/caveman.md"`.
+
+In addition to global instructions, each project can define its own instruction file:
+
+```json
+"projects": {
+  "workspace": "workspace",
+  "my-app": {
+    "path": "C:\\code\\my-app",
+    "instructions_file": "C:\\code\\my-app\\.agents-dialpad.md"
+  }
+}
+```
+
+When present, project instructions are appended after the global instructions, separated by a blank line. Both files are re-read on every turn.
 
 ### Advanced: wrapping an agent CLI
 

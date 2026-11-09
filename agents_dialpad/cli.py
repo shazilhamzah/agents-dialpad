@@ -96,7 +96,9 @@ def cmd_project(args) -> int:
     else:
         cfg, _ = config.load()
         for name, path in cfg["projects"].items():
-            print(f"{'ok ' if Path(path).is_dir() else 'MISSING'}  {name:<20} {path}")
+            inst = (cfg.get("_project_instructions") or {}).get(name)
+            inst_str = f"  (instructions: {inst})" if inst else ""
+            print(f"{'ok ' if Path(path).is_dir() else 'MISSING'}  {name:<20} {path}{inst_str}")
     if args.action in ("add", "remove"):
         print("Restart agents-dialpad for the change to take effect.")
     return 0

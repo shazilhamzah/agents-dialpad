@@ -108,6 +108,8 @@ def run_checks() -> list[Check]:
     for name, path in cfg["projects"].items():
         ok = Path(path).is_dir()
         checks.append(Check("ok" if ok else "warn", f"Project '{name}'", path, "" if ok else "Folder is missing; remove it with `agents-dialpad project remove`."))
+    for name in cfg.get("_invalid_projects", []):
+        checks.append(Check("warn", f"Project '{name}'", "missing 'path'", "A project object in config.json must define 'path'."))
     if cfg.get("instructions_file"):
         p = config.resolve_instructions_path(cfg["instructions_file"])
         checks.append(Check("ok" if p.is_file() else "warn", "Instructions file", str(p), "" if p.is_file() else "File not found; it is ignored."))
@@ -117,6 +119,9 @@ def run_checks() -> list[Check]:
         checks.append(Check("warn", "Keep awake while working", "not supported on this system"))
     else:
         checks.append(Check("ok", "Keep awake while working", "on"))
+    for name, inst_file in (cfg.get("_project_instructions") or {}).items():
+        p = config.resolve_instructions_path(inst_file)
+        checks.append(Check("ok" if p.is_file() else "warn", f"Project '{name}' instructions", str(p), "" if p.is_file() else "File not found; it is ignored."))
     if cfg.get("allow_full_access"):
         checks.append(Check("warn", "Full access", "enabled", "Agents can run commands without asking. Only use it on projects you trust."))
     for problem in cfg.get("_quick_problems", []):

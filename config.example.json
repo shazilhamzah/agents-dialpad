@@ -3,7 +3,10 @@
   "port": 8787,
   "projects": {
     "workspace": "data/workspace",
-    "my-app": "C:\\path\\to\\my-app"
+    "my-app": {
+      "path": "C:\\path\\to\\my-app",
+      "instructions_file": "instructions/my-app.md"
+    }
   },
   "instructions_file": null,
   "keep_awake": true,

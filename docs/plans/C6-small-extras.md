@@ -55,8 +55,8 @@ README configuration table (`projects` row) and the "Always-on instructions" sec
 
 ## Acceptance checklist
 
-- [ ] Old configs (plain paths) work unchanged.
-- [ ] Project instructions apply only to chats in that project.
+- [x] Old configs (plain paths) work unchanged.
+- [x] Project instructions apply only to chats in that project.
 
 ## Not planned (and why)
 
