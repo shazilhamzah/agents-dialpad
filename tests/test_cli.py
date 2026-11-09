@@ -45,6 +45,18 @@ def test_project_add_list_remove(data, tmp_path, capsys):
     assert "demo" not in json.loads((data / "config.json").read_text())["projects"]
 
 
+def test_project_list_shows_instructions_file(data, tmp_path, capsys):
+    proj = tmp_path / "p"
+    proj.mkdir()
+    run("init", "--yes")
+    cfg = json.loads((data / "config.json").read_text())
+    cfg["projects"]["demo"] = {"path": str(proj), "instructions_file": "custom.md"}
+    (data / "config.json").write_text(json.dumps(cfg))
+    run("project", "list")
+    out = capsys.readouterr().out
+    assert "demo" in out and "instructions: custom.md" in out
+
+
 @pytest.mark.parametrize("name", ["bad name", "../x", "", "-lead", "a" * 41])
 def test_project_names_are_validated(data, tmp_path, name):
     with pytest.raises(SystemExit):
@@ -115,6 +127,7 @@ def test_doctor_fails_without_any_agent_cli(data, monkeypatch):
     run("init", "--yes")
     monkeypatch.setenv("AG_CLAUDE", "definitely-not-installed-claude")
     monkeypatch.setenv("AG_AGY", "definitely-not-installed-agy")
+    monkeypatch.setenv("AG_CODEX", "definitely-not-installed-codex")
     monkeypatch.setattr(doctor_mod, "tailscale_checks", lambda port: [])
     checks = doctor_mod.run_checks()
     assert any(c.level == "fail" and "agent CLI" in c.label for c in checks)
@@ -125,10 +138,46 @@ def test_doctor_is_happy_with_an_agent_cli(data, monkeypatch):
     run("init", "--yes")
     monkeypatch.setenv("AG_CLAUDE", sys.executable)                    # any real executable that answers --version
     monkeypatch.setenv("AG_AGY", "definitely-not-installed-agy")
+    monkeypatch.setenv("AG_CODEX", "definitely-not-installed-codex")
     monkeypatch.setattr(doctor_mod, "tailscale_checks", lambda port: [])
     checks = doctor_mod.run_checks()
     assert not any(c.level == "fail" for c in checks)
     assert any(c.label.startswith("Claude Code") and c.level == "ok" for c in checks)
+
+
+def test_doctor_warns_on_invalid_schedule(data, monkeypatch):
+    run("init", "--yes")
+    monkeypatch.setenv("AG_CLAUDE", sys.executable)
+    monkeypatch.setenv("AG_AGY", "definitely-not-installed-agy")
+    monkeypatch.setenv("AG_CODEX", "definitely-not-installed-codex")
+    monkeypatch.setattr(doctor_mod, "tailscale_checks", lambda port: [])
+    cfg = json.loads((data / "config.json").read_text(encoding="utf-8"))
+    cfg["schedules"] = [{"name": "Bad", "at": "bad-time", "days": "daily", "project": "workspace", "agent": "claude", "prompt": "hi"}]
+    (data / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    checks = doctor_mod.run_checks()
+    assert any(c.label == "Schedule" and c.level == "warn" for c in checks)
+
+
+def test_doctor_checks_project_instructions(data, tmp_path, monkeypatch):
+    run("init", "--yes")
+    monkeypatch.setenv("AG_CLAUDE", sys.executable)
+    monkeypatch.setenv("AG_AGY", "definitely-not-installed-agy")
+    monkeypatch.setenv("AG_CODEX", "definitely-not-installed-codex")
+    monkeypatch.setattr(doctor_mod, "tailscale_checks", lambda port: [])
+
+    inst_file = tmp_path / "exist.md"
+    inst_file.write_text("rules", encoding="utf-8")
+    cfg = json.loads((data / "config.json").read_text(encoding="utf-8"))
+    cfg["projects"] = {
+        "valid": {"path": "workspace", "instructions_file": str(inst_file)},
+        "missing_file": {"path": "workspace", "instructions_file": "missing.md"},
+        "missing_path": {"instructions_file": "rules.md"},
+    }
+    (data / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    checks = doctor_mod.run_checks()
+    assert any("Project 'valid' instructions" in c.label and c.level == "ok" for c in checks)
+    assert any("Project 'missing_file' instructions" in c.label and c.level == "warn" for c in checks)
+    assert any("Project 'missing_path'" in c.label and c.level == "warn" for c in checks)
 
 
 # ------------------------------------------------------------------ autostart definitions

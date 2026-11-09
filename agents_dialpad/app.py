@@ -2,28 +2,40 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
+import logging
 import re
 import secrets
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config
+from pathlib import Path
+import sys
+from . import config, desk, devices, export, gitview, pairing, push, quick, schedules, uploads
+from .keepawake import KeepAwake
 from .providers import PLANNED, PROVIDERS
 from .runs import RunManager
 from .store import Store
 
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:\-\[\]/]{0,100}")  # never starts with '-': it is passed as an argument
+REQ_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+GROUP_RE = re.compile(r"^[0-9a-f]{8}$")
 
 BASE_MODES = [
     {"id": "readonly", "label": "Read-only (plan)"},
     {"id": "edit", "label": "Can edit files"},
+    {"id": "ask", "label": "Ask me before commands"},
 ]
 FULL_MODE = {"id": "full", "label": "Full access (runs commands, no prompts)"}
+
+
+class ApprovalDecision(BaseModel):
+    allow: bool
 
 
 class NewChat(BaseModel):
@@ -31,32 +43,208 @@ class NewChat(BaseModel):
     project: str
     mode: str = "readonly"
     model: str = ""
+    group: str | None = None
 
 
 class ChatPatch(BaseModel):
     model: str | None = None
+    title: str | None = Field(default=None, max_length=80)
+    pinned: bool | None = None
 
 
 class NewMessage(BaseModel):
-    text: str = Field(min_length=1, max_length=100_000)
+    text: str = Field(default="", max_length=100_000)
+    attachments: list[str] = Field(default_factory=list, max_length=10)
 
 
-def create_app(cfg: dict | None = None, token: str | None = None) -> FastAPI:
+class PushSubscribe(BaseModel):
+    subscription: dict
+    label: str = "device"
+
+
+class PushUnsubscribe(BaseModel):
+    endpoint: str
+
+
+class RevertPath(BaseModel):
+    path: str
+
+
+class NewDevice(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+
+
+class ImportChat(BaseModel):
+    project: str
+    session_id: str = Field(pattern=r"^[0-9a-f-]{36}$")
+    mode: str = "readonly"
+
+
+def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: KeepAwake | None = None) -> FastAPI:
     if cfg is None or token is None:
         cfg, token = config.load()
+    keep_awake = keep_awake or KeepAwake(enabled=bool(cfg.get("keep_awake", True)))
     store = Store(config.DATA / "chats")
-    runs = RunManager(store, cfg["projects"], lambda: config.read_instructions(cfg), lambda: bool(cfg.get("allow_full_access")))
+    devs = devices.Devices(config.DATA / "devices.json")
+    # A phone that subscribed with a device token stops getting pushes once that device is revoked (UI or CLI).
+    subs = push.Subscriptions(config.DATA / "push.json", keep=lambda s: not s.get("device") or devs.known(s["device"]))
+
+    async def notify(chat_id: str, run):
+        if not subs.all():
+            return
+        try:
+            chat = store.get(chat_id)
+        except KeyError:
+            return
+        done = next((e for e in reversed(run.events) if e["type"] == "done"), None)
+        payload = push.build_payload(chat, done, bool(cfg.get("push_show_titles")))
+        await asyncio.to_thread(push.send_all, subs, payload, config.DATA, cfg["push_contact"])
+
+    async def notify_approval(chat_id: str, run, ev: dict):
+        if not subs.all():
+            return
+        payload = {
+            "title": "agents-dialpad",
+            "body": "An agent needs your approval",
+            "tag": chat_id,
+            "url": "/#/c/" + chat_id,
+        }
+        await asyncio.to_thread(push.send_all, subs, payload, config.DATA, cfg["push_contact"])
+
+    def notify_limit(title: str, body: str) -> None:
+        """Low-limit alert (C3) as a push notification (B1). Called from the event loop; sends in a worker thread."""
+        if not subs.all():
+            return
+        payload = {"title": title, "body": body, "tag": "limits", "url": "/"}
+        asyncio.get_running_loop().run_in_executor(None, push.send_all, subs, payload, config.DATA, cfg["push_contact"])
+
+    async def get_all_limits(refresh: bool = False) -> list[dict]:
+        out = []
+        for p in PROVIDERS.values():
+            if not p.available():
+                continue
+            if p.name == "claude":
+                data = claude_limits()
+            elif hasattr(p, "limits"):
+                data = await p.limits(refresh)
+            else:
+                continue
+            out.append({"name": p.name, "label": p.label, **data})
+        return out
+
+    runs = RunManager(
+        store,
+        cfg["projects"],
+        lambda project=None: config.read_instructions(cfg, project),
+        lambda: bool(cfg.get("allow_full_access")),
+        keep_awake=keep_awake,
+        on_finish=notify,
+        on_event=notify_approval,
+        approval_timeout=lambda: cfg.get("approval_timeout_seconds", 600),
+        limit_alert_percent=int(cfg.get("limit_alert_percent", 20)),
+        get_limits=get_all_limits,
+        notify=notify_limit,
+    )
+    sched_state = schedules.State(config.DATA / "schedules-state.json")
+
+    loop_holder: list[asyncio.AbstractEventLoop | None] = [None]
+
+    def start_scheduled(s: dict, now: datetime | None = None) -> dict | None:
+        prov = PROVIDERS.get(s["agent"])
+        if not prov or not prov.available():
+            logging.getLogger("agents-dialpad.schedules").warning("Scheduled prompt '%s': agent '%s' not available", s["name"], s["agent"])
+            return None
+        if s["project"] not in cfg["projects"]:
+            logging.getLogger("agents-dialpad.schedules").warning("Scheduled prompt '%s': project '%s' not available", s["name"], s["project"])
+            return None
+        now_dt = now or datetime.now()
+        date_str = now_dt.strftime("%Y-%m-%d")
+        chat = store.create(s["agent"], s["project"], s["mode"], s.get("model", ""))
+        chat["title"] = f"{s['name']} · {date_str}"
+        store.save(chat)
+        runs.start(chat, s["prompt"])
+        return chat
+
+    def _tick_impl(now_dt: datetime) -> list[str]:
+        valid_scheds, _ = schedules.normalize(cfg.get("schedules", []), cfg)
+        started = []
+        for s in valid_scheds:
+            last_run = sched_state.get(s["name"])
+            if schedules.is_due(s, now_dt, last_run):
+                sched_state.set_run(s["name"], now_dt.strftime("%Y-%m-%d"))
+                chat = start_scheduled(s, now_dt)
+                if chat:
+                    started.append(chat["id"])
+        return started
+
+    def scheduler_tick(now: datetime | None = None) -> list[str]:
+        now_dt = now or datetime.now()
+        loop = loop_holder[0]
+        try:
+            asyncio.get_running_loop()
+            in_loop = True
+        except RuntimeError:
+            in_loop = False
+
+        if not in_loop and loop is not None and loop.is_running():
+            import concurrent.futures
+            fut = concurrent.futures.Future()
+            def run_in_loop():
+                try:
+                    fut.set_result(_tick_impl(now_dt))
+                except Exception as ex:
+                    fut.set_exception(ex)
+            loop.call_soon_threadsafe(run_in_loop)
+            return fut.result(timeout=10)
+        return _tick_impl(now_dt)
+
+    async def scheduler_loop():
+        while True:
+            try:
+                scheduler_tick()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                pass
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                break
+
+    @asynccontextmanager
+    async def lifespan(app_instance: FastAPI):
+        loop_holder[0] = asyncio.get_running_loop()
+        app_instance.state.loop = loop_holder[0]
+        task = asyncio.create_task(scheduler_loop())
+        try:
+            yield
+        finally:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
 
     def modes() -> list[dict]:
         """'Full access' only exists when `"allow_full_access": true` is set in config.json."""
         return BASE_MODES + ([FULL_MODE] if cfg.get("allow_full_access") else [])
 
-    def require_token(authorization: str | None = Header(default=None)) -> None:
+    def identity(authorization: str | None = Header(default=None)) -> str:
         supplied = authorization[7:] if authorization and authorization.startswith("Bearer ") else ""
-        if not secrets.compare_digest(supplied.encode(), token.encode()):
-            raise HTTPException(401, "Invalid or missing token")
+        if supplied and secrets.compare_digest(supplied.encode(), token.encode()):
+            return "owner"
+        dev = devs.match(supplied) if supplied else None
+        if dev:
+            devs.touch(dev)
+            return dev
+        raise HTTPException(401, "Invalid or missing token")
 
-    api = APIRouter(prefix="/api", dependencies=[Depends(require_token)])
+    def owner_only(who: str = Depends(identity)) -> str:
+        if who != "owner":
+            raise HTTPException(403, "Only the owner token can do this. Use the computer, or `agents-dialpad device`.")
+        return who
+
+    api = APIRouter(prefix="/api", dependencies=[Depends(identity)])
 
     async def check_model(provider, model: str) -> None:
         if model == "":
@@ -74,17 +262,69 @@ def create_app(cfg: dict | None = None, token: str | None = None) -> FastAPI:
             raise HTTPException(404, "No such chat") from None
 
     @api.get("/info")
-    async def info():
+    async def info(who: str = Depends(identity)):
+        def provider_modes(p) -> list[dict]:
+            all_m = modes()
+            if not getattr(p, "supports_ask", False):
+                return [m for m in all_m if m["id"] != "ask"]
+            return all_m
+
         providers = [
-            {"name": p.name, "label": p.label, "available": p.available(), "models": await p.models() if p.available() else []}
+            {
+                "name": p.name,
+                "label": p.label,
+                "available": p.available(),
+                "models": await p.models() if p.available() else [],
+                "modes": provider_modes(p),
+            }
             for p in PROVIDERS.values()
         ]
+        valid_scheds, _ = schedules.normalize(cfg.get("schedules", []), cfg)
         return {
-            "providers": providers + [{**p, "available": False, "models": []} for p in PLANNED],
+            "providers": providers + [{**p, "available": False, "models": [], "modes": [m for m in modes() if m["id"] != "ask"]} for p in PLANNED],
             "projects": list(cfg["projects"]),
             "modes": modes(),
             "usage": runs.usage,
+            "keep_awake": keep_awake.enabled,
+            "server_os": "windows" if sys.platform.startswith("win") else ("macos" if sys.platform == "darwin" else "linux"),
+            "me": who,
+            "has_schedules": len(valid_scheds) > 0,
         }
+
+    @api.get("/pair")
+    def pair(_who: str = Depends(owner_only)):
+        base = pairing.tailscale_url(cfg["port"])
+        link = pairing.pair_link(base or f"http://127.0.0.1:{cfg['port']}/", token)
+        return {"url": link, "remote": base is not None, "qr": pairing.qr_svg_data_uri(link)}
+
+    @api.get("/push/key")
+    def push_key():
+        try:
+            return {"publicKey": push.vapid_public_key(config.DATA)}
+        except push.PushUnavailable as e:
+            raise HTTPException(501, f"Notifications need the push extra: {e}")
+
+    @api.post("/push/subscribe")
+    def push_subscribe(body: PushSubscribe, who: str = Depends(identity)):
+        try:
+            subs.add(body.subscription, body.label, device=None if who == "owner" else who)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+
+    @api.post("/push/unsubscribe")
+    def push_unsubscribe(body: PushUnsubscribe):
+        subs.remove(body.endpoint)
+        return {"ok": True}
+
+    @api.post("/push/test")
+    async def push_test():
+        payload = {"title": "agents-dialpad", "body": "Notifications are working", "tag": "test", "url": "/"}
+        try:
+            sent = await asyncio.to_thread(push.send_all, subs, payload, config.DATA, cfg["push_contact"])
+            return {"sent": sent}
+        except push.PushUnavailable as e:
+            raise HTTPException(501, str(e))
 
     def claude_limits() -> dict:
         """Claude Code reports its subscription windows on every turn; we keep the latest."""
@@ -112,28 +352,83 @@ def create_app(cfg: dict | None = None, token: str | None = None) -> FastAPI:
 
     @api.get("/limits")
     async def limits(refresh: bool = False):
-        out = []
-        for p in PROVIDERS.values():
-            if not p.available():
-                continue
-            if p.name == "claude":
-                data = claude_limits()
-            elif hasattr(p, "limits"):
-                data = await p.limits(refresh)
-            else:
-                continue
-            out.append({"name": p.name, "label": p.label, **data})
-        return {"providers": out}
+        return {"providers": await get_all_limits(refresh)}
+
+    @api.get("/usage")
+    def get_usage(days: int = 7):
+        if not (1 <= days <= 90):
+            raise HTTPException(400, "days must be between 1 and 90")
+        return {"days": runs.usage_log.summary(days=days)}
+
+    @api.get("/schedules")
+    def list_schedules():
+        valid_scheds, _ = schedules.normalize(cfg.get("schedules", []), cfg)
+        now = datetime.now()
+        return [
+            {
+                "name": s["name"],
+                "next_run": schedules.next_run(s, now).isoformat(),
+                "last_run": sched_state.get(s["name"]),
+                "project": s["project"],
+                "agent": s["agent"],
+            }
+            for s in valid_scheds
+        ]
+
+    @api.post("/schedules/{name}/run")
+    async def run_schedule_now(name: str):
+        valid_scheds, _ = schedules.normalize(cfg.get("schedules", []), cfg)
+        s = next((x for x in valid_scheds if x["name"] == name), None)
+        if not s:
+            raise HTTPException(404, f"No schedule named '{name}'")
+        now = datetime.now()
+        sched_state.set_run(s["name"], now.strftime("%Y-%m-%d"))
+        chat = start_scheduled(s, now)
+        if not chat:
+            raise HTTPException(400, "Agent or project not available")
+        return {"chat_id": chat["id"]}
 
     @api.get("/chats")
-    def list_chats():
-        chats = store.list()
+    def list_chats(q: str = Query(default="", max_length=100)):
+        chats = store.search(q) if q else store.list()
         for c in chats:
             c["running"] = runs.active(c["id"]) is not None
         return {"chats": chats, "usage": runs.usage}
 
+    @api.get("/projects/{project}/desk-sessions")
+    def get_desk_sessions(project: str):
+        if project not in cfg["projects"]:
+            raise HTTPException(404, "Unknown project")
+        project_path = cfg["projects"][project]
+        existing = store.list()
+        exclude_ids = {c["session_id"] for c in existing if c.get("session_id")}
+        return desk.list_sessions(project_path, exclude_ids=exclude_ids)
+
+    @api.post("/chats/import")
+    def import_chat(body: ImportChat):
+        if body.project not in cfg["projects"]:
+            raise HTTPException(400, "Unknown project")
+        if body.mode not in {m["id"] for m in modes()}:
+            raise HTTPException(400, "Unknown mode")
+        project_path = cfg["projects"][body.project]
+        if not desk.session_belongs_to(project_path, body.session_id):
+            raise HTTPException(404, "That desktop session was not found for this project")
+        chat = store.create("claude", body.project, body.mode, model="")
+        chat["session_id"] = body.session_id
+        chat["imported"] = True
+        sessions = desk.list_sessions(project_path, exclude_ids=set(), limit=100)
+        matching = next((s for s in sessions if s["id"] == body.session_id), None)
+        if matching and matching.get("preview"):
+            chat["title"] = matching["preview"][:48]
+        else:
+            chat["title"] = "Desktop session"
+        store.save(chat)
+        return chat
+
     @api.post("/chats")
     async def create_chat(body: NewChat):
+        if body.group is not None and not GROUP_RE.match(body.group):
+            raise HTTPException(400, "Invalid group ID format")
         prov = PROVIDERS.get(body.provider)
         if not prov or not prov.available():
             raise HTTPException(400, f"Provider '{body.provider}' is not available")
@@ -141,20 +436,179 @@ def create_app(cfg: dict | None = None, token: str | None = None) -> FastAPI:
             raise HTTPException(400, "Unknown project")
         if body.mode not in {m["id"] for m in modes()}:
             raise HTTPException(400, "Unknown mode")
+        if body.mode == "ask" and not getattr(prov, "supports_ask", False):
+            raise HTTPException(400, f"{prov.label} can't ask before commands yet")
         await check_model(prov, body.model)
-        return store.create(body.provider, body.project, body.mode, body.model)
+        if body.group is not None and sum(1 for c in store.list() if c.get("group") == body.group) >= 2:
+            raise HTTPException(409, "A compare group holds two chats")
+        return store.create(body.provider, body.project, body.mode, body.model, group=body.group)
+
+    @api.get("/groups/{group}")
+    def get_group(group: str):
+        if not GROUP_RE.match(group):
+            raise HTTPException(400, "Invalid group ID format")
+        all_chats = store.list()
+        matched = [c for c in all_chats if c.get("group") == group]
+        if not matched:
+            raise HTTPException(404, "No such group")
+        chats = []
+        for summary in matched:
+            chat = store.get(summary["id"])
+            run = runs.active(chat["id"])
+            if run and chat["messages"] and chat["messages"][-1].get("run_id") == run.id:
+                chat["messages"].pop()
+            chat["running"] = run is not None
+            chats.append(chat)
+        return {"group": group, "chats": chats}
+
+    @api.delete("/groups/{group}")
+    async def delete_group(group: str):
+        if not GROUP_RE.match(group):
+            raise HTTPException(400, "Invalid group ID format")
+        all_chats = store.list()
+        matched = [c for c in all_chats if c.get("group") == group]
+        if not matched:
+            raise HTTPException(404, "No such group")
+        deleted = []
+        for summary in matched:
+            cid = summary["id"]
+            run = runs.active(cid)
+            if run:
+                run.stopped = True
+                run.kill()
+            store.delete(cid)
+            uploads.remove_all(cid)
+            deleted.append(cid)
+        return {"deleted": deleted}
+
+    quick_locks: dict[str, asyncio.Lock] = {}
+
+    @api.get("/projects/{project}/commands")
+    def list_commands(project: str):
+        if project not in cfg["projects"]:
+            raise HTTPException(404, "Unknown project")
+        cmds = quick.commands_for(cfg.get("quick_commands", {}), project)
+        return [{"index": c["index"], "label": c["label"]} for c in cmds]
+
+    @api.post("/projects/{project}/commands/{index}")
+    async def run_command_endpoint(project: str, index: int):
+        if project not in cfg["projects"]:
+            raise HTTPException(404, "Unknown project")
+        cmds = quick.commands_for(cfg.get("quick_commands", {}), project)
+        cmd = next((c for c in cmds if c["index"] == index), None)
+        if cmd is None:
+            raise HTTPException(404, "Unknown command")
+        lock = quick_locks.setdefault(project, asyncio.Lock())
+        if lock.locked():
+            raise HTTPException(409, "Another quick command is still running in this project")
+        async with lock:
+            cwd = cfg["projects"][project]
+            try:
+                return await quick.run(cmd["run"], cwd, cmd["timeout"])
+            except FileNotFoundError as e:
+                raise HTTPException(400, f"'{e}' was not found on this computer's PATH")
+
+    @api.get("/projects/{project}/changes")
+    async def get_project_changes(project: str):
+        if project not in cfg["projects"]:
+            raise HTTPException(404, "Unknown project")
+        root = Path(cfg["projects"][project])
+        try:
+            return await gitview.status(root)
+        except FileNotFoundError:
+            raise HTTPException(501, "git is not installed on this computer")
+        except TimeoutError:
+            raise HTTPException(504, "git took too long")
+
+    @api.get("/projects/{project}/changes/diff")
+    async def get_project_diff(project: str, path: str = Query(...)):
+        if project not in cfg["projects"]:
+            raise HTTPException(404, "Unknown project")
+        root = Path(cfg["projects"][project])
+        try:
+            return await gitview.diff(root, path)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except FileNotFoundError:
+            raise HTTPException(501, "git is not installed on this computer")
+        except TimeoutError:
+            raise HTTPException(504, "git took too long")
+
+    @api.post("/projects/{project}/changes/revert")
+    async def revert_project_file(project: str, body: RevertPath):
+        if project not in cfg["projects"]:
+            raise HTTPException(404, "Unknown project")
+        if runs.active_in_project(project):
+            raise HTTPException(409, "An agent is working in this project; wait for it to finish")
+        root = Path(cfg["projects"][project])
+        try:
+            await gitview.revert(root, body.path)
+            return {"ok": True}
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except LookupError as e:
+            raise HTTPException(409, str(e))
+        except FileNotFoundError:
+            raise HTTPException(501, "git is not installed on this computer")
+        except TimeoutError:
+            raise HTTPException(504, "git took too long")
+
+    @api.get("/devices")
+    def list_devices(who: str = Depends(identity)):
+        return {"devices": devs.list(), "me": who}
+
+    @api.post("/devices")
+    def add_device(body: NewDevice, _who: str = Depends(owner_only)):
+        try:
+            rec, raw_token = devs.add(body.name)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        base = pairing.tailscale_url(cfg["port"])
+        link = pairing.pair_link(base or f"http://127.0.0.1:{cfg['port']}/", raw_token)
+        return {"device": rec, "url": link, "qr": pairing.qr_svg_data_uri(link)}
+
+    @api.delete("/devices/{device_id}")
+    def delete_device(device_id: str, _who: str = Depends(owner_only)):
+        if not devs.revoke(device_id):
+            raise HTTPException(404, "Device not found")
+        subs.remove_device(device_id)
+        return {"ok": True}
 
     @api.patch("/chats/{chat_id}")
     async def patch_chat(chat_id: str, body: ChatPatch):
-        """Change the model; applies from the next message."""
+        """Change the model, title or pin state."""
         chat = chat_or_404(chat_id)
-        if runs.active(chat_id):
-            raise HTTPException(409, "Wait for the current reply to finish before changing the model")
         if body.model is not None:
+            if runs.active(chat_id):
+                raise HTTPException(409, "Wait for the current reply to finish before changing the model")
             await check_model(PROVIDERS[chat["provider"]], body.model)
             chat["model"] = body.model
-            store.save(chat)
-        return {"model": chat.get("model", "")}
+        if body.title is not None:
+            t = " ".join(body.title.split())
+            if not t:
+                raise HTTPException(400, "Title can't be empty")
+            chat["title"] = t
+        if body.pinned is not None:
+            chat["pinned"] = body.pinned
+        store.save(chat)
+        out = {"model": chat.get("model", "")}
+        if body.title is not None or body.pinned is not None:
+            out["title"] = chat.get("title", "")
+            out["pinned"] = bool(chat.get("pinned", False))
+        return out
+
+    @api.get("/chats/{chat_id}/export")
+    def export_chat(chat_id: str):
+        chat = chat_or_404(chat_id)
+        prov = PROVIDERS.get(chat["provider"])
+        label = prov.label if prov else chat["provider"]
+        md = export.chat_to_markdown(chat, label)
+        fname = export.filename_for(chat)
+        return Response(
+            content=md,
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
 
     @api.get("/chats/{chat_id}")
     def get_chat(chat_id: str):
@@ -163,7 +617,25 @@ def create_app(cfg: dict | None = None, token: str | None = None) -> FastAPI:
         if run and chat["messages"] and chat["messages"][-1].get("run_id") == run.id:
             chat["messages"].pop()  # already saved but still streaming: the client replays it live
         chat["running"] = run is not None
+        if chat.get("project") in cfg["projects"]:
+            chat["project_path"] = str(Path(cfg["projects"][chat["project"]]).resolve())
         return chat
+
+    @api.put("/chats/{chat_id}/uploads")
+    async def upload(chat_id: str, request: Request, name: str = Query(..., min_length=1, max_length=200)):
+        chat_or_404(chat_id)
+        try:
+            declared = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            raise HTTPException(400, "Bad Content-Length") from None
+        if declared > uploads.MAX_FILE:
+            raise HTTPException(413, "That file is larger than 15 MB")
+        data = bytearray()
+        async for chunk in request.stream():
+            data += chunk
+            if len(data) > uploads.MAX_FILE:
+                raise HTTPException(413, "That file is larger than 15 MB")
+        return uploads.save(chat_id, name, bytes(data))
 
     @api.delete("/chats/{chat_id}")
     async def delete_chat(chat_id: str):
@@ -173,6 +645,7 @@ def create_app(cfg: dict | None = None, token: str | None = None) -> FastAPI:
             run.stopped = True
             run.kill()
         store.delete(chat_id)
+        uploads.remove_all(chat_id)
         return {"ok": True}
 
     @api.post("/chats/{chat_id}/messages", status_code=202)
@@ -180,7 +653,17 @@ def create_app(cfg: dict | None = None, token: str | None = None) -> FastAPI:
         chat = chat_or_404(chat_id)
         if runs.active(chat_id):
             raise HTTPException(409, "This chat is already running")
-        run = runs.start(chat, body.text)
+        text = body.text
+        if not text.strip():
+            if body.attachments:
+                text = "See the attached files."
+            else:
+                raise HTTPException(400, "Message cannot be empty")
+        try:
+            paths = uploads.resolve(chat_id, body.attachments)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        run = runs.start(chat, text, attachments=paths)
         return {"run_id": run.id}
 
     @api.post("/chats/{chat_id}/stop")
@@ -189,6 +672,22 @@ def create_app(cfg: dict | None = None, token: str | None = None) -> FastAPI:
         if run:
             run.stopped = True
             run.kill()
+        return {"ok": True}
+
+    @api.post("/chats/{chat_id}/approvals/{req_id}")
+    def decide_approval(chat_id: str, req_id: str, body: ApprovalDecision):
+        chat_or_404(chat_id)
+        if not REQ_ID_RE.match(req_id):
+            raise HTTPException(400, "Invalid request ID")
+        latest = runs.runs.get(chat_id)
+        if latest and req_id in latest.decided:  # also after the reply finished (a second tap, another device)
+            raise HTTPException(409, "Approval request was already decided")
+        run = runs.active(chat_id)
+        if not run:
+            raise HTTPException(404, "No active run for this chat")
+        if req_id not in run.pending:
+            raise HTTPException(404, "Unknown approval request")
+        run.decide(req_id, body.allow)
         return {"ok": True}
 
     @api.get("/chats/{chat_id}/stream")
@@ -220,9 +719,11 @@ def create_app(cfg: dict | None = None, token: str | None = None) -> FastAPI:
 
         return StreamingResponse(gen(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store"})
 
-    app = FastAPI(title="agents-dialpad", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="agents-dialpad", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.include_router(api)
     app.mount("/", StaticFiles(directory=config.STATIC, html=True), name="static")
     app.state.runs = runs
     app.state.cfg = cfg
+    app.state.sched_state = sched_state
+    app.scheduler_tick = scheduler_tick
     return app

@@ -10,6 +10,12 @@ import time
 
 args = sys.argv[1:]
 
+if "acp" in args:
+    sys.path.insert(0, os.path.dirname(__file__))
+    import fake_agy_acp
+    fake_agy_acp.run(args)
+    sys.exit(0)
+
 
 def flag(name):
     return args[args.index(name) + 1] if name in args and args.index(name) + 1 < len(args) else None
@@ -64,4 +70,5 @@ info = {"mode": flag("--mode"), "model": flag("--model"), "resumed": "--conversa
 reply = "agy " + json.dumps(info, sort_keys=True)
 step(step_index=3, state="ACTIVE", step_type="agent_response", text_delta=reply[:10])
 step(step_index=3, state="DONE", step_type="agent_response", text_delta=reply[10:])
-out({"event": "result", "result": {"conversation_id": conv, "status": "SUCCESS", "response": reply, "duration_seconds": 0.5}})
+out({"event": "result", "result": {"conversation_id": conv, "status": "SUCCESS", "response": reply, "duration_seconds": 0.5,
+                                    "usage": {"input_tokens": 120, "output_tokens": 25}}})

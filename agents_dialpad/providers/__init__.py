@@ -3,10 +3,9 @@ from __future__ import annotations
 
 from .antigravity import AntigravityProvider
 from .claude import ClaudeProvider
+from .codex import CodexProvider
 
-PROVIDERS = {p.name: p for p in (ClaudeProvider(), AntigravityProvider())}
+PROVIDERS = {p.name: p for p in (ClaudeProvider(), AntigravityProvider(), CodexProvider())}
 
 # Shown greyed-out in the UI until they are implemented.
-PLANNED = [
-    {"name": "codex", "label": "Codex"},
-]
+PLANNED: list[dict] = []

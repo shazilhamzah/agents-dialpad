@@ -1,0 +1,8 @@
+{"type":"thread.started","thread_id":"01a1bd73-e7fa-7902-b168-08dc2651131d"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"clamping SessionEnd hook timeout to 3s in C:\\Users\\developer\\.codex\\hooks.json"}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"I’ll run that command and report its output."}}
+{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'echo hello'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'echo hello'","aggregated_output":"hello\r\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"`hello`"}}
+{"type":"turn.completed","usage":{"input_tokens":36603,"cached_input_tokens":28160,"cache_write_input_tokens":0,"output_tokens":103,"reasoning_output_tokens":10}}

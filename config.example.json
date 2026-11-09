@@ -2,9 +2,33 @@
   "host": "127.0.0.1",
   "port": 8787,
   "projects": {
-    "workspace": "data/workspace",
-    "my-app": "C:\\path\\to\\my-app"
+    "workspace": "workspace",
+    "my-app": {
+      "path": "C:\\path\\to\\my-app",
+      "instructions_file": "instructions/my-app.md"
+    }
   },
   "instructions_file": null,
-  "allow_full_access": false
+  "keep_awake": true,
+  "quick_commands": {
+    "*": [{ "label": "Git status", "run": ["git", "status", "--short"] }]
+  },
+  "push_show_titles": false,
+  "push_contact": "mailto:you@example.com",
+  "approval_timeout_seconds": 600,
+  "allow_full_access": false,
+  "codex_models": [],
+  "limit_alert_percent": 20,
+  "schedules": [
+    {
+      "name": "Morning summary",
+      "at": "08:00",
+      "days": ["mon", "tue", "wed", "thu", "fri"],
+      "project": "my-app",
+      "agent": "claude",
+      "mode": "readonly",
+      "model": "",
+      "prompt": "Summarise yesterday's commits in this repository in five bullet points."
+    }
+  ]
 }

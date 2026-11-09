@@ -23,8 +23,8 @@ A private network between your own devices, with free HTTPS certificates. No por
    ```
    Use a dedicated HTTPS port (8443 here). Plain `tailscale serve --bg 8787` takes over port 443 and would replace
    anything already published there. Undo with `tailscale serve --https=8443 off`.
-4. On the phone (Tailscale connected) open `https://<machine>.<tailnet>.ts.net:8443/#token=<token>`
-   (`agents-dialpad token` prints it), then Add to Home Screen.
+4. On the computer, run `agents-dialpad pair` and scan the QR code with your phone (Tailscale connected), or open
+   `https://<machine>.<tailnet>.ts.net:8443/#token=<token>` (`agents-dialpad token` prints it), then Add to Home Screen.
 
 `agents-dialpad doctor` checks the Tailscale connection and whether this mapping exists.
 

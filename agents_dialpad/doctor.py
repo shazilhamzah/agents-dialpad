@@ -11,7 +11,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config
+from . import config, keepawake
 
 
 @dataclass
@@ -43,9 +43,10 @@ def agent_checks() -> list[Check]:
     checks = [
         _agent("Claude Code (claude)", "AG_CLAUDE", "claude", "Install Claude Code and log in: https://claude.com/claude-code"),
         _agent("Antigravity (agy)", "AG_AGY", "agy", "Install Antigravity's CLI and log in."),
+        _agent("Codex (codex)", "AG_CODEX", "codex", "Install Codex CLI and log in: https://github.com/openai/codex"),
     ]
     if all(c.level != "ok" for c in checks):
-        checks.append(Check("fail", "At least one agent CLI is required", "", "Install and log in to Claude Code and/or Antigravity."))
+        checks.append(Check("fail", "At least one agent CLI is required", "", "Install and log in to Claude Code, Antigravity, or Codex."))
     return checks
 
 
@@ -107,11 +108,34 @@ def run_checks() -> list[Check]:
     for name, path in cfg["projects"].items():
         ok = Path(path).is_dir()
         checks.append(Check("ok" if ok else "warn", f"Project '{name}'", path, "" if ok else "Folder is missing; remove it with `agents-dialpad project remove`."))
+    for name in cfg.get("_invalid_projects", []):
+        checks.append(Check("warn", f"Project '{name}'", "missing 'path'", "A project object in config.json must define 'path'."))
     if cfg.get("instructions_file"):
         p = config.resolve_instructions_path(cfg["instructions_file"])
         checks.append(Check("ok" if p.is_file() else "warn", "Instructions file", str(p), "" if p.is_file() else "File not found; it is ignored."))
+    if not cfg.get("keep_awake", True):
+        checks.append(Check("warn", "Keep awake while working", "off (keep_awake is false)"))
+    elif isinstance(keepawake.default_backend(), keepawake._Noop):
+        checks.append(Check("warn", "Keep awake while working", "not supported on this system"))
+    else:
+        checks.append(Check("ok", "Keep awake while working", "on"))
+    for name, inst_file in (cfg.get("_project_instructions") or {}).items():
+        p = config.resolve_instructions_path(inst_file)
+        checks.append(Check("ok" if p.is_file() else "warn", f"Project '{name}' instructions", str(p), "" if p.is_file() else "File not found; it is ignored."))
     if cfg.get("allow_full_access"):
         checks.append(Check("warn", "Full access", "enabled", "Agents can run commands without asking. Only use it on projects you trust."))
+    for problem in cfg.get("_quick_problems", []):
+        checks.append(Check("warn", "Quick commands", problem))
+    for proj_cmds in cfg.get("quick_commands", {}).values():
+        for cmd in proj_cmds:
+            prog = cmd["run"][0]
+            if not shutil.which(prog):
+                checks.append(Check("warn", f"Quick command '{cmd['label']}'", f"'{prog}' not found on PATH", f"Make sure '{prog}' is installed and on PATH."))
+    if cfg.get("schedules"):
+        from . import schedules
+        _, problems = schedules.normalize(cfg["schedules"], cfg)
+        for prob in problems:
+            checks.append(Check("warn", "Schedule", prob, "Check schedules in config.json."))
     checks.extend(agent_checks())
     checks.append(server_check(cfg["host"], cfg["port"]))
     checks.extend(tailscale_checks(cfg["port"]))

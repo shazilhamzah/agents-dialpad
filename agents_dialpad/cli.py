@@ -96,7 +96,9 @@ def cmd_project(args) -> int:
     else:
         cfg, _ = config.load()
         for name, path in cfg["projects"].items():
-            print(f"{'ok ' if Path(path).is_dir() else 'MISSING'}  {name:<20} {path}")
+            inst = (cfg.get("_project_instructions") or {}).get(name)
+            inst_str = f"  (instructions: {inst})" if inst else ""
+            print(f"{'ok ' if Path(path).is_dir() else 'MISSING'}  {name:<20} {path}{inst_str}")
     if args.action in ("add", "remove"):
         print("Restart agents-dialpad for the change to take effect.")
     return 0
@@ -131,7 +133,7 @@ def cmd_init(args) -> int:
     return 0
 
 
-# ------------------------------------------------------------------ token
+# ------------------------------------------------------------------ token / pair
 def cmd_token(args) -> int:
     if args.rotate:
         raw = config.read_raw()
@@ -144,6 +146,93 @@ def cmd_token(args) -> int:
     if not args.quiet:
         print(f"\nLink for this computer : {local_url(cfg, token)}")
         print("For your phone         : https://<your-machine>.<your-tailnet>.ts.net:8443/#token=" + token)
+    return 0
+
+
+def time_ago(ts: float | None) -> str:
+    if not ts:
+        return "never used"
+    import time
+    diff = int(time.time() - ts)
+    if diff < 60:
+        return f"{diff}s ago"
+    if diff < 3600:
+        return f"{diff // 60}m ago"
+    if diff < 86400:
+        return f"{diff // 3600}h ago"
+    return f"{diff // 86400}d ago"
+
+
+def cmd_device(args) -> int:
+    from . import devices, pairing
+
+    devs = devices.Devices(config.DATA / "devices.json")
+    if args.action == "list":
+        items = devs.list()
+        if not items:
+            print("No devices paired.")
+            return 0
+        for d in items:
+            seen = f"last used {time_ago(d['last_seen'])}" if d.get("last_seen") else "never used"
+            print(f"{d['id']}\t{d['name']}\t({seen})")
+        return 0
+    if args.action == "add":
+        name = args.name_or_id
+        if not name:
+            raise SystemExit("device add needs a NAME")
+        try:
+            rec, dev_token = devs.add(name)
+        except ValueError as e:
+            raise SystemExit(str(e))
+        cfg, _ = config.load()
+        local = local_url(cfg)
+        base = pairing.tailscale_url(cfg["port"]) or local
+        link = pairing.pair_link(base, dev_token)
+        print(f"Added device {rec['name']} ({rec['id']}).")
+        print("Anyone who scans this code can use your agents. Do not share or screenshot it.")
+        if not args.no_qr:
+            pairing.qr_terminal(link)
+        if args.png:
+            pairing.qr_png(link, args.png)
+            print(f"Saved {args.png}")
+        print(link)
+        return 0
+    if args.action == "revoke":
+        dev_id = args.name_or_id
+        if not dev_id:
+            raise SystemExit("device revoke needs an ID")
+        if devs.revoke(dev_id):
+            print(f"Device {dev_id} revoked.")
+        else:
+            raise SystemExit(f"No device found with id {dev_id}")
+        return 0
+    return 0
+
+
+def cmd_pair(args) -> int:
+    from . import devices, pairing
+
+    cfg, token = config.load()
+    if getattr(args, "device", None):
+        devs = devices.Devices(config.DATA / "devices.json")
+        try:
+            rec, token = devs.add(args.device)
+        except ValueError as e:
+            raise SystemExit(str(e))
+        print(f"Added device {rec['name']} ({rec['id']}).")
+    local = local_url(cfg)
+    base = args.url or pairing.tailscale_url(cfg["port"]) or local
+    remote = base != local
+    link = pairing.pair_link(base, token)
+    print("Anyone who scans this code can use your agents. Do not share or screenshot it.")
+    if not remote:
+        print("Phone access is not published, so this link only works on this computer. See docs/remote-access.md.")
+    if not args.no_qr:
+        pairing.qr_terminal(link)
+    if args.png:
+        pairing.qr_png(link, args.png)
+        print(f"Saved {args.png}")
+    print(link)
     return 0
 
 
@@ -198,6 +287,13 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--quiet", action="store_true", help="print only the token")
     t.set_defaults(func=cmd_token)
 
+    pa = sub.add_parser("pair", help="print a QR code and link to connect a phone")
+    pa.add_argument("--url", help="override the detected base URL")
+    pa.add_argument("--png", metavar="FILE", help="also save the QR code as a PNG file")
+    pa.add_argument("--no-qr", action="store_true", help="print only the link, no terminal QR")
+    pa.add_argument("--device", help="pair as a new device with NAME instead of owner token")
+    pa.set_defaults(func=cmd_pair)
+
     d = sub.add_parser("doctor", help="check that everything needed is installed and ready")
     d.set_defaults(func=cmd_doctor)
 
@@ -205,10 +301,17 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("action", choices=["install", "uninstall", "status"])
     a.add_argument("--dry-run", action="store_true", help="show what would be written, change nothing")
     a.set_defaults(func=cmd_autostart)
+
+    dev = sub.add_parser("device", help="manage per-device tokens")
+    dev.add_argument("action", choices=["add", "list", "revoke"])
+    dev.add_argument("name_or_id", nargs="?")
+    dev.add_argument("--no-qr", action="store_true", help="print only the link, no terminal QR")
+    dev.add_argument("--png", metavar="FILE", help="also save the QR code as a PNG file")
+    dev.set_defaults(func=cmd_device)
     return p
 
 
-COMMANDS = {"serve", "init", "project", "token", "doctor", "autostart"}
+COMMANDS = {"serve", "init", "project", "token", "pair", "doctor", "autostart", "device"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -224,6 +327,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"project {args.action} needs a NAME" + (" and PATH" if args.action == "add" else ""))
     if args.command == "project" and args.action == "add" and not args.path:
         parser.error("project add needs NAME and PATH")
+    if args.command == "device" and args.action in ("add", "revoke") and not args.name_or_id:
+        parser.error(f"device {args.action} needs a NAME" if args.action == "add" else "device revoke needs an ID")
     return args.func(args)
 
 

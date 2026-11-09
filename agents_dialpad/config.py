@@ -86,10 +86,50 @@ def load() -> tuple[dict, str]:
     cfg.setdefault("host", "127.0.0.1")
     cfg.setdefault("port", 8787)
     cfg.setdefault("projects", {"workspace": "workspace"})
-    # Relative project paths are relative to the data folder, so moving it doesn't break them.
-    cfg["projects"] = {name: str(p if (p := Path(raw)).is_absolute() else DATA / p) for name, raw in cfg["projects"].items()}
+    raw_projects = cfg.get("projects") or {}
+    norm_projects: dict[str, str] = {}
+    proj_instructions: dict[str, str] = {}
+    invalid_projects: list[str] = []
+
+    for name, val in raw_projects.items():
+        if isinstance(val, dict):
+            raw_path = val.get("path")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                invalid_projects.append(name)
+                continue
+            p = Path(raw_path)
+            norm_projects[name] = str(p if p.is_absolute() else DATA / p)
+            inst = val.get("instructions_file")
+            if inst and isinstance(inst, str) and inst.strip():
+                proj_instructions[name] = inst.strip()
+        elif isinstance(val, str):
+            p = Path(val)
+            norm_projects[name] = str(p if p.is_absolute() else DATA / p)
+        else:
+            invalid_projects.append(name)
+
+    cfg["projects"] = norm_projects
+    cfg["_project_instructions"] = proj_instructions
+    cfg["_invalid_projects"] = invalid_projects
     # Optional text file added to every conversation (none by default). Example: "instructions/caveman.md".
     cfg.setdefault("instructions_file", None)
+    cfg.setdefault("keep_awake", True)
+    cfg.setdefault("approval_timeout_seconds", 600)
+    if "AG_APPROVAL_TIMEOUT" in os.environ:
+        try:
+            cfg["approval_timeout_seconds"] = float(os.environ["AG_APPROVAL_TIMEOUT"])
+        except ValueError:
+            pass
+    cfg.setdefault("push_show_titles", False)
+    cfg.setdefault("push_contact", "mailto:agents-dialpad@example.com")
+    from . import quick
+    cfg["quick_commands"], cfg["_quick_problems"] = quick.normalize(cfg.get("quick_commands"))
+    # Extra models to offer for Codex (empty by default: offers "Default").
+    cfg.setdefault("codex_models", [])
+    # Threshold for low-subscription alerts (percentage). 0 disables.
+    cfg.setdefault("limit_alert_percent", 20)
+    # Scheduled prompts to run at specific times (empty by default).
+    cfg.setdefault("schedules", [])
 
     token = os.environ.get("AG_TOKEN") or cfg.get("token")
     if token:
@@ -125,12 +165,26 @@ def resolve_instructions_path(name: str) -> Path:
     return DATA / p
 
 
-def read_instructions(cfg: dict) -> str:
+def read_instructions(cfg: dict, project: str | None = None) -> str:
     """Read fresh on every turn so edits apply without a restart."""
-    name = cfg.get("instructions_file")
-    if not name:
-        return ""
-    try:
-        return resolve_instructions_path(name).read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
+    parts = []
+    global_file = cfg.get("instructions_file")
+    if global_file:
+        try:
+            txt = resolve_instructions_path(global_file).read_text(encoding="utf-8").strip()
+            if txt:
+                parts.append(txt)
+        except OSError:
+            pass
+
+    if project:
+        proj_inst = (cfg.get("_project_instructions") or {}).get(project)
+        if proj_inst:
+            try:
+                txt = resolve_instructions_path(proj_inst).read_text(encoding="utf-8").strip()
+                if txt:
+                    parts.append(txt)
+            except OSError:
+                pass
+
+    return "\n\n".join(parts)
