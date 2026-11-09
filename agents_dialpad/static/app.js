@@ -926,7 +926,7 @@ async function openNewChat() {
     <label for="n-model" id="lbl-model">Model</label>
     <select id="n-model">${modelOptions(first, '')}</select>
     <label for="n-proj">Project folder</label>
-    <select id="n-proj">${info.projects.map((p) => `<option>${esc(p)}</option>`).join('')}</select>
+    <select id="n-proj">${info.projects.map((p) => `<option${(cur && cur.chat && cur.chat.project === p) ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select>
     <label for="n-mode">Permissions</label>
     <select id="n-mode">${firstModes.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('')}</select>
     <div class="actions"><button class="btn secondary" type="button" data-close>Cancel</button><button class="btn" type="submit" id="n-go">Start</button></div>

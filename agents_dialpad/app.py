@@ -322,8 +322,17 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         except KeyError:
             raise HTTPException(404, "No such chat") from None
 
+    def check_project_or_refresh(project: str, not_found_code: int = 404):
+        if project not in cfg["projects"] and (cfg.get("scan_documents") or cfg.get("scan_dirs")):
+            config.refresh_projects(cfg)
+        if project not in cfg["projects"]:
+            raise HTTPException(not_found_code, "Unknown project")
+
     @api.get("/info")
     async def info(who: str = Depends(identity)):
+        if cfg.get("scan_documents") or cfg.get("scan_dirs"):
+            config.refresh_projects(cfg)
+
         def provider_modes(p) -> list[dict]:
             all_m = modes()
             if not getattr(p, "supports_ask", False):
@@ -362,7 +371,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
                 for p in PLANNED
                 if p["name"] not in disabled
             ],
-            "projects": list(cfg["projects"]),
+            "projects": sorted(list(cfg["projects"]), key=lambda x: (x != "workspace", x.lower())),
             "modes": modes(),
             "usage": runs.usage,
             "keep_awake": keep_awake.enabled,
@@ -478,8 +487,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
 
     @api.get("/projects/{project}/desk-sessions")
     def get_desk_sessions(project: str):
-        if project not in cfg["projects"]:
-            raise HTTPException(404, "Unknown project")
+        check_project_or_refresh(project, 404)
         project_path = cfg["projects"][project]
         existing = store.list()
         exclude_ids = {c["session_id"] for c in existing if c.get("session_id")}
@@ -487,8 +495,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
 
     @api.post("/chats/import")
     def import_chat(body: ImportChat):
-        if body.project not in cfg["projects"]:
-            raise HTTPException(400, "Unknown project")
+        check_project_or_refresh(body.project, 400)
         if body.mode not in {m["id"] for m in modes()}:
             raise HTTPException(400, "Unknown mode")
         project_path = cfg["projects"][body.project]
@@ -517,8 +524,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             st = await prov.status()
             if st.get("state") == "not_signed_in":
                 raise HTTPException(400, "Codex isn't signed in on the computer. Run `codex login` there, then try again.")
-        if body.project not in cfg["projects"]:
-            raise HTTPException(400, "Unknown project")
+        check_project_or_refresh(body.project, 400)
         if body.mode not in {m["id"] for m in modes()}:
             raise HTTPException(400, "Unknown mode")
         if body.mode == "ask" and not getattr(prov, "supports_ask", False):
@@ -530,15 +536,13 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
 
     @api.get("/projects/{project}/commands")
     def list_commands(project: str):
-        if project not in cfg["projects"]:
-            raise HTTPException(404, "Unknown project")
+        check_project_or_refresh(project, 404)
         cmds = quick.commands_for(cfg.get("quick_commands", {}), project)
         return [{"index": c["index"], "label": c["label"]} for c in cmds]
 
     @api.post("/projects/{project}/commands/{index}")
     async def run_command_endpoint(project: str, index: int):
-        if project not in cfg["projects"]:
-            raise HTTPException(404, "Unknown project")
+        check_project_or_refresh(project, 404)
         cmds = quick.commands_for(cfg.get("quick_commands", {}), project)
         cmd = next((c for c in cmds if c["index"] == index), None)
         if cmd is None:
@@ -555,8 +559,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
 
     @api.get("/projects/{project}/changes")
     async def get_project_changes(project: str):
-        if project not in cfg["projects"]:
-            raise HTTPException(404, "Unknown project")
+        check_project_or_refresh(project, 404)
         root = Path(cfg["projects"][project])
         try:
             return await gitview.status(root)
@@ -567,8 +570,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
 
     @api.get("/projects/{project}/changes/diff")
     async def get_project_diff(project: str, path: str = Query(...)):
-        if project not in cfg["projects"]:
-            raise HTTPException(404, "Unknown project")
+        check_project_or_refresh(project, 404)
         root = Path(cfg["projects"][project])
         try:
             return await gitview.diff(root, path)
@@ -581,8 +583,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
 
     @api.post("/projects/{project}/changes/revert")
     async def revert_project_file(project: str, body: RevertPath):
-        if project not in cfg["projects"]:
-            raise HTTPException(404, "Unknown project")
+        check_project_or_refresh(project, 404)
         if runs.active_in_project(project):
             raise HTTPException(409, "An agent is working in this project; wait for it to finish")
         root = Path(cfg["projects"][project])
