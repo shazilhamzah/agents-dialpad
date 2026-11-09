@@ -125,6 +125,7 @@ Everything lives in `config.json` in the data folder (see [`config.example.json`
 | `allow_full_access` | `true` adds the **Full access** permission level (see below). Default off. |
 | `approval_timeout_seconds` | Seconds to wait for command approvals in "Ask me before commands" mode before auto-denying (default 600). Overridden by `AG_APPROVAL_TIMEOUT`. |
 | `push_show_titles` | Include chat title in push notifications (`false` by default for privacy). |
+| `push_show_commands` | Include command preview in approval push notifications and enable lock-screen **Allow** button (default `false` for privacy). |
 | `push_contact` | VAPID `sub` claim (`mailto:` address). Default: `mailto:agents-dialpad@example.com`. |
 | `codex_models` | List of model names to offer for Codex chats (default `[]` offers "Default"). |
 | `codex_default_model` | Model string to use for Codex chats when "Default" is selected (e.g. `"gpt-5.1-custom"`). Default `""` (uses Codex's configured model). |
@@ -222,9 +223,11 @@ agents-dialpad can send a Web Push notification when a reply finishes, fails, or
 3. Test with **More → Send a test notification**.
 
 > [!NOTE]
-> On iPhone/iPad, Web Push only works when added to the Home Screen: in Safari, tap Share → Add to Home Screen, then launch the app from your Home Screen.
+> On iPhone/iPad, Web Push only works when added to the Home Screen: in Safari, tap Share → Add to Home Screen, then launch the app from your Home Screen. Action buttons on notifications are not supported on iOS/iPadOS; tapping the notification opens the chat directly and scrolls to the highlighted approval card.
 >
 > For privacy, push messages are generic by default (`Your reply is ready`). Enable `"push_show_titles": true` in `config.json` if you want the chat title included.
+>
+> When an agent requests command approval, push notifications offer **Allow** and **Deny** buttons on platforms that support them (Android Chrome, desktop browsers). By default (`push_show_commands: false`), the command preview is hidden on the lock screen and only **Deny** and **Open** are offered. Set `"push_show_commands": true` to show the command preview and enable the **Allow** button from the lock screen. Approvals from notifications use one-time action tokens and record "Allowed from notification".
 
 ## Usage limits and history
 

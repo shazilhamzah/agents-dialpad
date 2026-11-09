@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import hashlib
 import json
 import logging
 import re
@@ -10,7 +11,7 @@ import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -20,7 +21,7 @@ from . import config, desk, devices, export, gitview, pairing, push, quick, sche
 from .keepawake import KeepAwake
 from .providers import PLANNED, PROVIDERS
 from .runs import RunManager
-from .store import Store
+from .store import ID_RE, Store
 
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:\-\[\]/]{0,100}")  # never starts with '-': it is passed as an argument
 REQ_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
@@ -101,11 +102,40 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
     async def notify_approval(chat_id: str, run, ev: dict):
         if not subs.all():
             return
+        req_id = str(ev.get("id"))
+        plain_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(plain_token.encode("utf-8")).hexdigest()
+        run.action_tokens[req_id] = token_hash
+
+        try:
+            chat = store.get(chat_id)
+            prov_name = chat.get("provider", "")
+            prov = PROVIDERS.get(prov_name)
+            provider_label = prov.label if prov else prov_name.capitalize()
+        except KeyError:
+            provider_label = "Agent"
+
+        tool_name = (ev.get("tool") or "").lower()
+        if tool_name in ("edit", "multiedit", "write"):
+            title = f"{provider_label} wants to edit a file"
+        else:
+            title = f"{provider_label} wants to run a command"
+
+        push_show_commands = bool(cfg.get("push_show_commands", False))
+        cmd = ev.get("command") or ""
+        body = cmd[:160] if push_show_commands else "Open to see what it wants to do"
+
         payload = {
-            "title": "agents-dialpad",
-            "body": "An agent needs your approval",
-            "tag": chat_id,
-            "url": "/#/c/" + chat_id,
+            "title": title,
+            "body": body,
+            "tag": f"approval:{chat_id}:{req_id}",
+            "url": f"/#/c/{chat_id}?approval={req_id}",
+            "approval": {
+                "chat": chat_id,
+                "req": req_id,
+                "token": plain_token,
+                "can_allow": push_show_commands,
+            },
         }
         await asyncio.to_thread(push.send_all, subs, payload, config.DATA, cfg["push_contact"])
 
@@ -705,6 +735,68 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
 
     app = FastAPI(title="agents-dialpad", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.include_router(api)
+
+    @app.post("/push-action")
+    async def push_action(request: Request):
+        cl = request.headers.get("content-length")
+        if cl and cl.isdigit() and int(cl) > 1024:
+            raise HTTPException(413, "Body too large")
+        raw_body = await request.body()
+        if len(raw_body) > 1024:
+            raise HTTPException(413, "Body too large")
+
+        try:
+            data = json.loads(raw_body)
+        except Exception:
+            return JSONResponse({"ok": False}, status_code=404)
+        if not isinstance(data, dict):
+            return JSONResponse({"ok": False}, status_code=404)
+
+        chat_id = data.get("chat")
+        req_id = data.get("req")
+        token = data.get("token")
+        allow = data.get("allow")
+
+        if not isinstance(chat_id, str) or not ID_RE.match(chat_id):
+            return JSONResponse({"ok": False}, status_code=404)
+        if not isinstance(req_id, str) or not REQ_ID_RE.match(req_id):
+            return JSONResponse({"ok": False}, status_code=404)
+        if not isinstance(token, str) or not token:
+            return JSONResponse({"ok": False}, status_code=404)
+        if not isinstance(allow, bool):
+            return JSONResponse({"ok": False}, status_code=404)
+
+        try:
+            store.get(chat_id)
+        except KeyError:
+            return JSONResponse({"ok": False}, status_code=404)
+
+        run = runs.active(chat_id)
+        if not run:
+            latest = runs.runs.get(chat_id)
+            if latest and req_id in latest.decided:
+                return JSONResponse({"ok": False, "reason": "already_decided"}, status_code=409)
+            return JSONResponse({"ok": False}, status_code=404)
+
+        if req_id in run.decided:
+            return JSONResponse({"ok": False, "reason": "already_decided"}, status_code=409)
+
+        stored_hash = run.action_tokens.get(req_id)
+        if not stored_hash:
+            return JSONResponse({"ok": False}, status_code=404)
+
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        if not secrets.compare_digest(stored_hash, token_hash):
+            return JSONResponse({"ok": False}, status_code=404)
+
+        run.action_tokens.pop(req_id, None)
+
+        ok = run.decide(req_id, allow, by="notification")
+        if not ok:
+            return JSONResponse({"ok": False, "reason": "already_decided"}, status_code=409)
+
+        return JSONResponse({"ok": True})
+
     app.mount("/", StaticFiles(directory=config.STATIC, html=True), name="static")
     app.state.runs = runs
     app.state.cfg = cfg
