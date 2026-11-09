@@ -99,13 +99,16 @@ let activeViews = [];     // all active chat views (1 for single chat, 2 for com
 
 /* ===================== sheets, menu, confirm ===================== */
 function openSheet(html, label) {
+  $$('dialog.sheet:not([open])').forEach((d) => d.remove());   // a closed sheet whose 'close' event is still pending
   const dlg = document.createElement('dialog');
   dlg.className = 'sheet';
   if (label) dlg.setAttribute('aria-label', label);
   dlg.innerHTML = `<div class="grab" aria-hidden="true"></div><div class="sheet-body">${html}</div>`;
   document.body.appendChild(dlg);
   dlg.addEventListener('close', () => dlg.remove());
-  dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });   // tap the scrim
+  dlg.addEventListener('click', (e) => {
+    if (e.target === dlg || e.target.closest('[data-close]')) dlg.close();   // tap the scrim, or any Close/Done/Cancel button
+  });
   const grab = $('.grab', dlg);                                                     // drag the grabber down to dismiss
   let y0 = null;
   grab.addEventListener('pointerdown', (e) => { y0 = e.clientY; grab.setPointerCapture(e.pointerId); dlg.style.animation = 'none'; dlg.style.transition = 'none'; });
@@ -403,26 +406,32 @@ async function openDevices() {
   renderDevList(data.devices);
 
   if (isOwner) {
-    $('#btn-add-dev', dlg).onclick = async () => {
-      const name = prompt('Device name (e.g. My Phone):');
-      if (!name || !name.trim()) return;
-      try {
-        const res = await getJSON('/devices', {
-          method: 'POST',
-          body: JSON.stringify({ name: name.trim() }),
-        });
-        dlg.close();
-        const pairDlg = openSheet(`
-          <h2>Pair device</h2>
-          <p class="lede">Scan with your phone's camera to connect <b>${esc(res.device.name)}</b>.</p>
-          <div class="qr"><img src="${res.qr}" alt="QR code to pair"></div>
-          <p class="note"><a href="${res.url}" target="_blank" rel="noopener">Open link directly</a></p>
-          <div class="actions"><button class="btn" type="button" data-close>Done</button></div>
-        `, 'Pair device');
-        $('[data-close]', pairDlg).onclick = () => pairDlg.close();
-      } catch (err) {
-        handleErr(err);
-      }
+    $('#btn-add-dev', dlg).onclick = () => {
+      dlg.close();
+      const nameDlg = openSheet(`<form id="f-dev"><h2>Add a device</h2>
+        <label for="d-name">Device name</label>
+        <input id="d-name" type="text" maxlength="40" placeholder="My phone" required>
+        <div class="actions"><button class="btn secondary" type="button" data-close>Cancel</button><button class="btn" type="submit" id="d-go">Create code</button></div></form>`, 'Add a device');
+      $('#f-dev', nameDlg).onsubmit = async (e) => {
+        e.preventDefault();
+        const name = $('#d-name', nameDlg).value.trim();
+        if (!name) return;
+        const go = $('#d-go', nameDlg); go.setAttribute('aria-busy', 'true');
+        try {
+          const res = await getJSON('/devices', { method: 'POST', body: JSON.stringify({ name }) });
+          nameDlg.close();
+          openSheet(`
+            <h2>Pair device</h2>
+            <p class="lede">Scan with your phone's camera to connect <b>${esc(res.device.name)}</b>. Anyone who scans this code can use your agents, so don't share it.</p>
+            <div class="qr"><img src="${esc(res.qr)}" alt="QR code to pair" width="240" height="240"></div>
+            <p class="note"><a href="${esc(res.url)}" target="_blank" rel="noopener">Open link directly</a></p>
+            <div class="actions"><button class="btn" type="button" data-close>Done</button></div>
+          `, 'Pair device');
+        } catch (err) {
+          go.removeAttribute('aria-busy');
+          handleErr(err);
+        }
+      };
     };
   }
 }
@@ -541,9 +550,12 @@ async function openNewChat() {
   const isClaude = (first && first.name === 'claude');
   const firstModes = (first && first.modes) ? first.modes : info.modes;
   let provOptions = info.providers.map((p) => `<option value="${esc(p.name)}"${p.available ? '' : ' disabled'}>${esc(p.label)}${p.available ? '' : ' (not yet)'}</option>`).join('');
-  if (avail.length >= 2) {
-    provOptions += `<option value="__both__">Both (compare)</option>`;
-  }
+  // Compare: one option per pair of available agents (the compare view shows two side by side).
+  const pairs = [];
+  avail.forEach((a, i) => avail.slice(i + 1).forEach((b) => pairs.push([a, b])));
+  provOptions += pairs.map(([a, b]) =>
+    `<option value="__cmp__:${esc(a.name)},${esc(b.name)}">Compare: ${esc(a.label)} + ${esc(b.label)}</option>`).join('');
+  const pairOf = (val) => val.startsWith('__cmp__:') ? val.slice(8).split(',').map((n) => avail.find((p) => p.name === n)) : null;
   const dlg = openSheet(`<form id="f-new"><h2>New chat</h2>
     <label for="n-prov">Agent</label>
     <select id="n-prov">${provOptions}</select>
@@ -557,16 +569,17 @@ async function openNewChat() {
     <button class="btn secondary" type="button" id="btn-continue-desk" style="width: 100%; margin-top: 12px;" ${isClaude ? '' : 'hidden'}>Continue a desktop session</button>
   </form>`, 'New chat');
   $('[data-close]', dlg).onclick = () => dlg.close();
-  // Permission levels every available agent supports (used for "Both (compare)").
-  const sharedModes = () => info.modes.filter((m) => avail.every((p) => !p.modes || p.modes.some((x) => x.id === m.id)));
+  // Permission levels both agents of a compare pair support.
+  const sharedModes = (pair) => info.modes.filter((m) => pair.every((p) => !p.modes || p.modes.some((x) => x.id === m.id)));
   $('#n-prov', dlg).onchange = () => {
     const val = $('#n-prov', dlg).value;
-    const isBoth = val === '__both__';
+    const pair = pairOf(val);
+    const isBoth = !!pair;
     const prov = info.providers.find((p) => p.name === val);
     $('#lbl-model', dlg).hidden = isBoth;
     $('#n-model', dlg).hidden = isBoth;
     if (!isBoth) $('#n-model', dlg).innerHTML = modelOptions(prov, '');
-    const pModes = isBoth ? sharedModes() : ((prov && prov.modes) ? prov.modes : info.modes);
+    const pModes = isBoth ? sharedModes(pair) : ((prov && prov.modes) ? prov.modes : info.modes);
     $('#n-mode', dlg).innerHTML = pModes.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
     $('#btn-continue-desk', dlg).hidden = val !== 'claude';
   };
@@ -583,11 +596,12 @@ async function openNewChat() {
     const project = $('#n-proj', dlg).value;
     const mode = $('#n-mode', dlg).value;
     try {
-      if (prov === '__both__') {
+      const pair = pairOf(prov);
+      if (pair) {
         const bytes = new Uint8Array(4);
         crypto.getRandomValues(bytes);
         const gid = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-        await Promise.all(avail.map((p) => postJSON('/chats', {
+        await Promise.all(pair.map((p) => postJSON('/chats', {
           provider: p.name,
           project,
           mode,
@@ -1267,7 +1281,6 @@ async function openQuickCommands() {
     </div>
     <div class="actions" id="qactions"><button class="btn secondary" type="button" data-close>Close</button></div>`, 'Quick commands');
 
-  $('[data-close]', dlg).onclick = () => dlg.close();
   const btns = dlg.querySelectorAll('.quick-btn');
   const resBox = $('#qres', dlg);
   const metaBox = $('#qmeta', dlg);

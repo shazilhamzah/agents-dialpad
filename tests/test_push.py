@@ -168,3 +168,19 @@ def test_send_all_removes_gone_subscriptions(monkeypatch, tmp_path):
     remaining = subs.all()
     assert len(remaining) == 1
     assert remaining[0]["endpoint"] == "https://push.example.com/device2"
+
+
+def test_subscriptions_of_revoked_devices_are_hidden_and_removed(tmp_path):
+    alive = {"dev1"}
+    subs = push.Subscriptions(tmp_path / "push.json", keep=lambda s: not s.get("device") or s["device"] in alive)
+    owner = {"endpoint": "https://push.example.com/owner", "keys": {"p256dh": "k", "auth": "a"}}
+    phone = {"endpoint": "https://push.example.com/phone", "keys": {"p256dh": "k", "auth": "a"}}
+    subs.add(owner, label="laptop")
+    subs.add(phone, label="phone", device="dev1")
+    assert len(subs.all()) == 2
+
+    alive.clear()  # revoked elsewhere (for example from the CLI)
+    assert [s["endpoint"] for s in subs.all()] == [owner["endpoint"]]
+
+    subs.remove_device("dev1")
+    assert len(push.Subscriptions(tmp_path / "push.json").all()) == 1

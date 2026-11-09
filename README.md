@@ -241,7 +241,7 @@ Work started at your computer can be picked up on your phone, and vice-versa (Cl
 Each phone or tablet can have its own revocable token:
 
 - **Add a device:** In the web app on your computer, open **More → Devices → Add a device**, or run `agents-dialpad device add "My Phone"` (or `agents-dialpad pair --device "My Phone"`).
-- **Revoke a device:** In the Devices menu on your computer (or via `agents-dialpad device revoke <id>`), tap **Revoke**. That device is signed out immediately.
+- **Revoke a device:** In the Devices menu on your computer (or via `agents-dialpad device revoke <id>`), tap **Revoke**. That device is signed out immediately, even while the server is running, and its phone stops getting notifications.
 - **Migration advice:** After pairing your phones as individual devices, run `agents-dialpad token --rotate` on the computer. The old shared token stops working, while individual devices continue uninterrupted.
 
 ## Attachments
@@ -286,7 +286,7 @@ You can schedule recurring prompts in `config.json`:
 
 ## Compare agents
 
-When two or more agents are available, choose **Both (compare)** in the New chat sheet. It creates linked chats for both agents in the same project and opens a compare view:
+When two or more agents are available, the New chat sheet lists one **Compare: A + B** option per pair of agents (for example **Compare: Claude Code + Codex**). It creates a linked chat for each of the two agents in the same project and opens a compare view:
 - On screens under 1000 px, a tab bar lets you switch between agent conversations, showing activity dots while an agent is generating.
 - On screens 1000 px and wider, both agent conversations render side-by-side.
 - A single composer sends the prompt to both agents simultaneously. Both stream and can be stopped together.

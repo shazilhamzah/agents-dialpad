@@ -9,7 +9,8 @@ from .proc import kill_tree
 
 MAX_DIFF = 300_000          # characters
 MAX_UNTRACKED = 512_000     # bytes read for an untracked file preview
-GIT_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"}
+GIT_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0", "GIT_LITERAL_PATHSPECS": "1", "LC_ALL": "C"}
+# GIT_LITERAL_PATHSPECS: a path from the phone is a file name, never a glob like "*" or ":(top)".
 
 
 def safe_path(root: Path, rel: str) -> Path:
@@ -167,7 +168,7 @@ async def diff(root: Path, rel: str) -> dict:
 
 
 async def revert(root: Path, rel: str) -> None:
-    """Only for paths that exist in HEAD (cat-file -e). Runs: git restore --source=HEAD --staged --worktree -- rel.
+    """Only for single files that exist in HEAD (cat-file -t says blob). Runs: git restore --source=HEAD --staged --worktree -- rel.
     Raise LookupError for files not in HEAD (new files)."""
     safe_path(root, rel)
     rel_git = rel.replace("\\", "/")
@@ -176,9 +177,11 @@ async def revert(root: Path, rel: str) -> None:
     if code != 0 or out.strip() != "true":
         raise ValueError("Not a git repository")
 
-    code, _ = await git(root, "cat-file", "-e", f"HEAD:{rel_git}")
+    code, kind = await git(root, "cat-file", "-t", f"HEAD:{rel_git}")
     if code != 0:
         raise LookupError("This file is new, so there is nothing to revert to")
+    if kind.strip() != "blob":
+        raise ValueError("Only single files can be reverted")
 
     code, err = await git(root, "restore", "--source=HEAD", "--staged", "--worktree", "--", rel_git)
     if code != 0:

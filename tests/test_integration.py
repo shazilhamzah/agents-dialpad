@@ -1500,3 +1500,21 @@ def test_per_project_instructions_integration(env, calls, tmp_path):
 
 
 
+
+
+def test_compare_group_holds_two_chats(env):
+    client, h = env()
+    with client:
+        gid = "abcd1234"
+        for prov in ("claude", "antigravity"):
+            assert client.post("/api/chats", headers=h, json={"provider": prov, "project": "workspace", "group": gid}).status_code == 200
+        r = client.post("/api/chats", headers=h, json={"provider": "codex", "project": "workspace", "group": gid})
+        assert r.status_code == 409
+
+
+def test_bad_upload_content_length_is_a_400(env):
+    client, h = env()
+    with client:
+        cid = client.post("/api/chats", headers=h, json={"provider": "claude", "project": "workspace"}).json()["id"]
+        r = client.put(f"/api/chats/{cid}/uploads?name=a.txt", headers={**h, "Content-Length": "abc"}, content=b"")
+        assert r.status_code in (400, 422)

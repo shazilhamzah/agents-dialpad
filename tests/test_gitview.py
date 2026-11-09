@@ -163,3 +163,21 @@ def test_paths_outside_the_project_are_rejected(tmp_path):
     for p in bad_paths:
         with pytest.raises(ValueError):
             gitview.safe_path(tmp_path, p)
+
+
+def test_revert_refuses_folders_and_globs(tmp_path):
+    init_repo(tmp_path)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.txt").write_text("a\n", encoding="utf-8")
+    (tmp_path / "src" / "b.txt").write_text("b\n", encoding="utf-8")
+    run_git(tmp_path, "add", "src")
+    run_git(tmp_path, "-c", "user.name=Test", "-c", "user.email=t@e.com", "commit", "-m", "add src")
+    (tmp_path / "src" / "a.txt").write_text("a changed\n", encoding="utf-8")
+    (tmp_path / "src" / "b.txt").write_text("b changed\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        asyncio.run(gitview.revert(tmp_path, "src"))
+    with pytest.raises((LookupError, ValueError)):
+        asyncio.run(gitview.revert(tmp_path, "src/*.txt"))
+    assert (tmp_path / "src" / "a.txt").read_text(encoding="utf-8") == "a changed\n"
+    assert (tmp_path / "src" / "b.txt").read_text(encoding="utf-8") == "b changed\n"

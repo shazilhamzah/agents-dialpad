@@ -35,10 +35,13 @@ def validate_subscription(sub: dict) -> dict:
 
 
 class Subscriptions:
-    """<data>/push.json: {"subscriptions": [{"endpoint", "keys": {"p256dh", "auth"}, "label", "created"}]}"""
+    """<data>/push.json: {"subscriptions": [{"endpoint", "keys": {"p256dh", "auth"}, "label", "created", "device"?}]}
 
-    def __init__(self, path: Path):
+    `keep(sub)` hides subscriptions that should no longer get pushes (a revoked device's phone)."""
+
+    def __init__(self, path: Path, keep=None):
         self.path = path
+        self.keep = keep
         self._load()
 
     def _load(self) -> None:
@@ -59,9 +62,9 @@ class Subscriptions:
         os.replace(tmp, self.path)
 
     def all(self) -> list[dict]:
-        return list(self._subs)
+        return [s for s in self._subs if self.keep is None or self.keep(s)]
 
-    def add(self, sub: dict, label: str) -> None:
+    def add(self, sub: dict, label: str, device: str | None = None) -> None:
         clean = validate_subscription(sub)
         entry = {
             "endpoint": clean["endpoint"],
@@ -69,9 +72,17 @@ class Subscriptions:
             "label": str(label)[:40],
             "created": time.time(),
         }
+        if device:
+            entry["device"] = device
         self._subs = [s for s in self._subs if s.get("endpoint") != clean["endpoint"]]
         self._subs.append(entry)
         self._save()
+
+    def remove_device(self, device_id: str) -> None:
+        before_len = len(self._subs)
+        self._subs = [s for s in self._subs if s.get("device") != device_id]
+        if len(self._subs) != before_len:
+            self._save()
 
     def remove(self, endpoint: str) -> bool:
         before_len = len(self._subs)

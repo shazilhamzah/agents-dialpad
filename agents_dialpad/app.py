@@ -85,7 +85,9 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         cfg, token = config.load()
     keep_awake = keep_awake or KeepAwake(enabled=bool(cfg.get("keep_awake", True)))
     store = Store(config.DATA / "chats")
-    subs = push.Subscriptions(config.DATA / "push.json")
+    devs = devices.Devices(config.DATA / "devices.json")
+    # A phone that subscribed with a device token stops getting pushes once that device is revoked (UI or CLI).
+    subs = push.Subscriptions(config.DATA / "push.json", keep=lambda s: not s.get("device") or devs.known(s["device"]))
 
     async def notify(chat_id: str, run):
         if not subs.all():
@@ -227,8 +229,6 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         """'Full access' only exists when `"allow_full_access": true` is set in config.json."""
         return BASE_MODES + ([FULL_MODE] if cfg.get("allow_full_access") else [])
 
-    devs = devices.Devices(config.DATA / "devices.json")
-
     def identity(authorization: str | None = Header(default=None)) -> str:
         supplied = authorization[7:] if authorization and authorization.startswith("Bearer ") else ""
         if supplied and secrets.compare_digest(supplied.encode(), token.encode()):
@@ -305,9 +305,9 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             raise HTTPException(501, f"Notifications need the push extra: {e}")
 
     @api.post("/push/subscribe")
-    def push_subscribe(body: PushSubscribe):
+    def push_subscribe(body: PushSubscribe, who: str = Depends(identity)):
         try:
-            subs.add(body.subscription, body.label)
+            subs.add(body.subscription, body.label, device=None if who == "owner" else who)
         except ValueError as e:
             raise HTTPException(400, str(e))
         return {"ok": True}
@@ -439,6 +439,8 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         if body.mode == "ask" and not getattr(prov, "supports_ask", False):
             raise HTTPException(400, f"{prov.label} can't ask before commands yet")
         await check_model(prov, body.model)
+        if body.group is not None and sum(1 for c in store.list() if c.get("group") == body.group) >= 2:
+            raise HTTPException(409, "A compare group holds two chats")
         return store.create(body.provider, body.project, body.mode, body.model, group=body.group)
 
     @api.get("/groups/{group}")
@@ -475,6 +477,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
                 run.stopped = True
                 run.kill()
             store.delete(cid)
+            uploads.remove_all(cid)
             deleted.append(cid)
         return {"deleted": deleted}
 
@@ -568,6 +571,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
     def delete_device(device_id: str, _who: str = Depends(owner_only)):
         if not devs.revoke(device_id):
             raise HTTPException(404, "Device not found")
+        subs.remove_device(device_id)
         return {"ok": True}
 
     @api.patch("/chats/{chat_id}")
@@ -620,7 +624,10 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
     @api.put("/chats/{chat_id}/uploads")
     async def upload(chat_id: str, request: Request, name: str = Query(..., min_length=1, max_length=200)):
         chat_or_404(chat_id)
-        declared = int(request.headers.get("content-length") or 0)
+        try:
+            declared = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            raise HTTPException(400, "Bad Content-Length") from None
         if declared > uploads.MAX_FILE:
             raise HTTPException(413, "That file is larger than 15 MB")
         data = bytearray()

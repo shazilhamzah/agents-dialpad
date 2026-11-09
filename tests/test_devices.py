@@ -85,3 +85,29 @@ def test_touch_throttling(tmp_path, monkeypatch):
 
     data2 = json.loads(path.read_text(encoding="utf-8"))
     assert data2["devices"][0]["last_seen"] == t1
+
+
+def test_revoke_from_another_process_applies_at_once(tmp_path):
+    """The server's Devices sees a revoke done by the CLI (a second instance) without a restart."""
+    path = tmp_path / "devices.json"
+    server = devices.Devices(path)
+    rec, raw_token = server.add("Phone")
+    assert server.match(raw_token) == rec["id"]
+
+    cli = devices.Devices(path)
+    assert cli.revoke(rec["id"]) is True
+
+    assert server.match(raw_token) is None
+    assert not server.known(rec["id"])
+    server.touch(rec["id"])  # a late touch must not write the revoked device back
+    assert devices.Devices(path).list() == []
+
+
+def test_devices_added_by_another_process_are_kept(tmp_path):
+    path = tmp_path / "devices.json"
+    server = devices.Devices(path)
+    first, _ = server.add("Phone")
+    second, token = devices.Devices(path).add("Tablet")
+    assert server.match(token) == second["id"]
+    server.touch(first["id"])
+    assert {d["name"] for d in devices.Devices(path).list()} == {"Phone", "Tablet"}
