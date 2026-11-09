@@ -622,8 +622,6 @@ dialog.sheet.wide { width: min(94vw, 60rem); }
 .lock-card .lock-icon {
   width: 72px;
   height: 72px;
-  border-radius: 18px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
 }
 .lock-card h2 {
   margin: 0;
@@ -667,3 +665,13 @@ dialog.sheet.wide { width: min(94vw, 60rem); }
   color: var(--text-3);
   font-size: 0.8125rem;
 }
+
+/* brand: the Concept B mark. The SVG files follow light/dark themselves; the inline splash uses the accent token. */
+.boot { min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; color: var(--accent); text-align: center; padding: 24px; }
+.boot svg { width: 72px; height: 72px; }
+.boot-lockup { width: min(70vw, 16rem); height: auto; }
+.boot p { color: var(--text-2); }
+.login-logo { display: block; height: 3rem; width: auto; max-width: 100%; }
+.bar h1.brand { display: flex; align-items: center; gap: 8px; }
+.bar h1.brand img { flex: none; width: 24px; height: 24px; }
+.bar h1.brand span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

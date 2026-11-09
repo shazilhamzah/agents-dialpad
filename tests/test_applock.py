@@ -392,3 +392,35 @@ def test_doctor_applock_checks(tmp_path):
     warns = [c for c in checks if c.level == "warn"]
     assert len(warns) == 1
     assert "orphan_dev" in warns[0].detail
+
+
+def test_cannot_register_another_passkey_while_locked(env, webauthn_fixture, monkeypatch):
+    """With the lock on, adding a passkey needs a valid unlock, or a stolen bearer token could add its own and unlock."""
+    client = env["client"]
+    auth = env["auth"]
+    _mock_challenges(monkeypatch, webauthn_fixture)
+
+    opt = client.post("/api/lock/register/options", headers=auth, json={})
+    ver = client.post("/api/lock/register/verify", headers=auth, json={
+        "challenge_id": opt.json()["challenge_id"],
+        "credential": webauthn_fixture["reg_credential"],
+    })
+    unlock = ver.json()["unlock"]
+
+    # Locked, no X-Unlock: both registration steps are refused
+    assert client.post("/api/lock/register/options", headers=auth, json={}).status_code == 423
+    assert client.post("/api/lock/register/verify", headers=auth, json={
+        "challenge_id": "x", "credential": webauthn_fixture["reg_credential"],
+    }).status_code == 423
+
+    # Unlocked: adding another passkey is allowed
+    ok = client.post("/api/lock/register/options", headers={**auth, "X-Unlock": unlock}, json={})
+    assert ok.status_code == 200
+
+
+def test_origins_do_not_come_from_the_host_header(env):
+    origins = applock.get_allowed_origins(port=8787, tailscale_url="https://box.tail1.ts.net")
+    assert "https://box.tail1.ts.net" in origins
+    assert "http://localhost:8787" in origins
+    assert not any("evil" in o for o in origins)
+    assert "http://localhost" not in origins     # no port-less loopback origins

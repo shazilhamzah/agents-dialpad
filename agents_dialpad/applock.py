@@ -211,33 +211,12 @@ class RateLimiter:
         self._fails.pop(who, None)
 
 
-def get_allowed_origins(host: str, scheme: str, port: int | None = None, cfg: dict | None = None) -> list[str]:
-    """Compute allowed origins for WebAuthn ceremonies."""
-    p = port or (443 if scheme == "https" else 80)
-    origins = {
-        f"http://localhost:{p}",
-        f"http://127.0.0.1:{p}",
-        f"https://localhost:{p}",
-        f"https://127.0.0.1:{p}",
-        "http://localhost:8787",
-        "http://127.0.0.1:8787",
-        "http://localhost",
-        "http://127.0.0.1",
-        "https://localhost",
-        "https://127.0.0.1",
-    }
-    # Check Tailscale serve
-    try:
-        from . import pairing
-        ts = pairing.tailscale_url(p)
-        if ts:
-            origins.add(ts.rstrip("/"))
-    except Exception:
-        pass
-    if cfg and cfg.get("tailscale_url"):
-        origins.add(cfg["tailscale_url"].rstrip("/"))
-    if scheme == "https" and host.endswith(".ts.net"):
-        origins.add(f"https://{host}")
-        if port and port not in (80, 443):
-            origins.add(f"https://{host}:{port}")
-    return list(origins)
+def get_allowed_origins(port: int, tailscale_url: str | None = None) -> list[str]:
+    """Origins a WebAuthn ceremony may come from: loopback on our port, plus the Tailscale HTTPS URL.
+
+    Never built from the request's Host header, which a client controls.
+    """
+    origins = [f"http://localhost:{port}", f"http://127.0.0.1:{port}"]
+    if tailscale_url:
+        origins.append(tailscale_url.rstrip("/"))
+    return origins

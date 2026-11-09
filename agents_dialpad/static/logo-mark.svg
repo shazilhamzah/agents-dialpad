@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="agents-dialpad">
+  <title>agents-dialpad</title>
+  <style>path{fill:#7aa7ff}@media (prefers-color-scheme:light){path{fill:#1a56e8}}</style>
+  <path fill-rule="evenodd" d="M 158 76.17 V 53 A 23 23 0 0 1 204 53 V 146 A 76 76 0 1 1 158 76.17 Z M 98.45 127.55 A 13.50 13.50 0 1 1 117.55 108.45 L 145.55 136.45 A 13.50 13.50 0 0 1 145.55 155.55 L 117.55 183.55 A 13.50 13.50 0 1 1 98.45 164.45 L 113.73 149.18 A 4.50 4.50 0 0 0 113.73 142.82 Z"/>
+</svg>

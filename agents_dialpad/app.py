@@ -93,6 +93,19 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
     lock_sessions = applock.Sessions(idle_seconds=idle_mins * 60)
     lock_limiter = applock.RateLimiter()
     pending_challenges: dict[str, dict] = {}
+    ts_cache: dict = {"at": 0.0, "url": None}
+
+    def allowed_origins() -> list[str]:
+        """Loopback plus the Tailscale URL (looked up at most once a minute: it runs a subprocess)."""
+        if time.time() - ts_cache["at"] > 60:
+            ts_cache["url"] = pairing.tailscale_url(cfg["port"])
+            ts_cache["at"] = time.time()
+        return applock.get_allowed_origins(cfg["port"], ts_cache["url"])
+
+    def require_unlock(who: str, x_unlock: str | None) -> None:
+        """When this identity has a lock, the caller must hold a valid unlock session."""
+        if lock_store.has_lock(who) and not (x_unlock and lock_sessions.check(x_unlock, who)):
+            raise HTTPException(423, "locked")
 
     async def notify(chat_id: str, run):
         if not subs.all():
@@ -630,14 +643,19 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         }
 
     @api.post("/lock/register/options")
-    async def lock_register_options(request: Request, who: str = Depends(identity)):
+    async def lock_register_options(
+        request: Request,
+        who: str = Depends(identity),
+        x_unlock: str | None = Header(default=None, alias="X-Unlock"),
+    ):
         if not applock.WEBAUTHN_AVAILABLE:
             raise HTTPException(503, "WebAuthn extra not installed")
+        require_unlock(who, x_unlock)
         try:
             body = await request.json()
         except Exception:
             body = {}
-        rp_id = body.get("rp_id") or request.url.hostname or "localhost"
+        rp_id = request.url.hostname or "localhost"
         exclude_creds = [
             applock.PublicKeyCredentialDescriptor(id=applock.b64url_decode(c["credential_id"]))
             for c in lock_store.list(who)
@@ -673,9 +691,14 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         return raw
 
     @api.post("/lock/register/verify")
-    async def lock_register_verify(request: Request, who: str = Depends(identity)):
+    async def lock_register_verify(
+        request: Request,
+        who: str = Depends(identity),
+        x_unlock: str | None = Header(default=None, alias="X-Unlock"),
+    ):
         if not applock.WEBAUTHN_AVAILABLE:
             raise HTTPException(503, "WebAuthn extra not installed")
+        require_unlock(who, x_unlock)
         body = await request.json()
         chal_id = body.get("challenge_id")
         chal = None
@@ -704,12 +727,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             raise HTTPException(400, "Challenge expired")
 
         cred_dict = body.get("credential") if "credential" in body else body
-        origins = applock.get_allowed_origins(
-            host=request.url.hostname or "localhost",
-            scheme=request.url.scheme,
-            port=request.url.port,
-            cfg=cfg,
-        )
+        origins = await asyncio.to_thread(allowed_origins)
         try:
             ver = applock.verify_registration_response(
                 credential=cred_dict,
@@ -815,12 +833,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             lock_limiter.record_fail(who)
             raise HTTPException(400, "Unknown credential")
 
-        origins = applock.get_allowed_origins(
-            host=request.url.hostname or "localhost",
-            scheme=request.url.scheme,
-            port=request.url.port,
-            cfg=cfg,
-        )
+        origins = await asyncio.to_thread(allowed_origins)
         try:
             ver = applock.verify_authentication_response(
                 credential=cred_dict,
@@ -846,9 +859,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         who: str = Depends(identity),
         x_unlock: str | None = Header(default=None, alias="X-Unlock"),
     ):
-        if lock_store.has_lock(who):
-            if not x_unlock or not lock_sessions.check(x_unlock, who):
-                raise HTTPException(423, "locked")
+        require_unlock(who, x_unlock)
         removed = lock_store.remove(who, credential_id)
         if not removed:
             raise HTTPException(404, "Credential not found")
