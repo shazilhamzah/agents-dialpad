@@ -242,7 +242,7 @@ async function copyText(text) {
 function showLogin(msg) {
   teardownChat();
   app.innerHTML = `<form class="login" id="login">
-      <h1>agents-dialpad</h1>
+      <h1><img class="login-logo" src="/logo-lockup.svg" alt="agents-dialpad"></h1>
       <p>Paste the access token printed when the gateway starts, or open the full link it printed.</p>
       <label for="tok">Access token</label>
       <input id="tok" name="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" required>
@@ -259,7 +259,7 @@ function mountShell() {
   app.innerHTML = `<div class="shell" data-view="list" data-running="false">
     <aside class="side" aria-label="Chats">
       <header class="bar">
-        <div class="titles"><h1>agents-dialpad</h1></div>
+        <div class="titles"><h1 class="brand"><img src="/logo-mark.svg" alt="" width="24" height="24"><span>agents-dialpad</span></h1></div>
         <button class="icon-btn" id="btn-sched" type="button" aria-label="Schedules" style="display:none">${icon('clock')}</button>
         <button class="icon-btn" id="btn-limits" type="button" aria-label="Usage limits">${icon('gauge')}</button>
         <button class="icon-btn" id="btn-side-more" type="button" aria-label="More" aria-haspopup="menu" aria-expanded="false">${icon('more')}</button>
@@ -530,7 +530,7 @@ function ensureLockOverlay() {
   overlay.setAttribute('hidden', '');
   overlay.innerHTML = `
     <div class="lock-card">
-      <img src="/icon-192.png" alt="" class="lock-icon" width="72" height="72">
+      <img src="/logo-mark.svg" alt="" class="lock-icon" width="72" height="72">
       <h2>Locked</h2>
       <p class="lock-msg">Unlock to continue.</p>
       <button id="btn-unlock" class="btn primary" type="button">Unlock</button>

@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-lockup-dark.svg">
+    <img src="docs/assets/logo-lockup-light.svg" alt="agents-dialpad" height="96">
+  </picture>
+</p>
+
 # agents-dialpad
 
 Chat with the AI coding agents on your own computer (Claude Code, Antigravity and Codex) from your phone.
@@ -275,7 +282,7 @@ You can lock the app on your phone with Face ID, Touch ID, or fingerprint (WebAu
 - When App lock is active on a device, push notification action buttons (Allow/Deny) are omitted so commands cannot be authorized from the lock screen without unlocking.
 
 ### Addresses supported
-WebAuthn passkeys require a secure context (HTTPS or localhost). Tailscale Serve HTTPS (`<user>.<tailscale>.ts.net`) and desktop localhost work out of the box. Plain-HTTP LAN addresses cannot use App lock.
+WebAuthn passkeys require a secure context (HTTPS or localhost). App lock works on the Tailscale Serve HTTPS address and on `localhost`. Plain-HTTP LAN addresses cannot use it. It has been tested against recorded WebAuthn responses, but not yet on real phones: try it on yours and report what you see.
 
 ### Recovery
 If you lose your phone or passkey, you can reset locks at any time from your computer without needing the passkey:

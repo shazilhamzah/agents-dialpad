@@ -138,8 +138,8 @@ limitation. Configuration table. `CHANGELOG.md`. `SECURITY.md` (if present): the
 
 ## Acceptance checklist
 
-- [x] Android and desktop: Allow/Deny work from the notification without opening the app.
-- [x] iPhone: tapping opens the chat at the highlighted approval card.
+- [ ] Android and desktop: Allow/Deny work from the notification without opening the app. (Server side `/push-action` is tested; the real notification buttons were NOT tried on a device.)
+- [ ] iPhone: tapping opens the chat at the highlighted approval card. (Router handles `?approval=`; NOT tried on a real iPhone.)
 - [x] Allow is never offered when the command is not shown.
 - [x] Action tokens are single use, die with the request, are compared in constant time, and are never logged.
 - [x] Nothing in `/push-action` accepts or reveals the long-lived access token.

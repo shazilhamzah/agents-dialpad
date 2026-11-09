@@ -6,6 +6,7 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 ## [Unreleased]
 
 ### Added
+- **New logo (Concept B):** a lowercase "d" whose counter is a ">" prompt, in the app palette (`#7aa7ff` on dark, `#1a56e8` on light). Used for the app icons, favicon, Windows shortcut icon, login screen, sidebar header, lock screen, boot splash and the README. `python tools/make_icons.py` regenerates every icon from `agents_dialpad/static/logo-mark.svg` with the standard library only.
 - **App lock with Face ID / fingerprint:** Lock the app on your phone or computer with WebAuthn passkeys (Face ID, Touch ID, fingerprint, or screen PIN). Protects the app with a full-screen overlay after an idle timeout (`app_lock_idle_minutes`, default 5) or when backgrounded. Until unlocked, the server rejects all API calls from that identity with HTTP 423 Locked. Push notification action buttons are withheld for locked devices. Manage passkeys from **More → App lock** or with `agents-dialpad lock status|reset [--device <id>]` on the computer. Installed via optional extra `agents-dialpad[lock]`.
 - **Lock-screen approval actions:** Allow or Deny command approvals directly from push notifications on supported platforms (Android and desktop browsers). Uses one-time, single-use action tokens validated in constant time via `POST /push-action`. Command previews and lock-screen Allow buttons require `"push_show_commands": true` in `config.json`. On iOS/iPadOS, notifications deep-link directly to the highlighted approval card in chat.
 - **Codex readiness & friendly errors:** The app detects when Codex is not signed in and shows "Codex (sign in on the computer)" in the picker instead of failing on first message. Raw JSON error strings are mapped to clear human-readable messages with actionable buttons (such as **Change model**). Added `"codex_default_model"` to configure default model without editing `~/.codex/config.toml`, and `"disabled_agents"` to hide unused agents from the UI.
@@ -49,6 +50,8 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 - `app.create_app()` builds an independent app, which is what lets the tests run many isolated apps.
 
 ### Fixed
+- App lock: with the lock on, adding another passkey now needs an unlock too. Before, a stolen access token could register its own passkey and get an unlock session.
+- App lock: allowed WebAuthn origins no longer come from the request's `Host` header.
 - Fixed: approval cards cut long commands off, and showed nothing for Antigravity.
 - Merge-safe saving: a finishing reply no longer overwrites changes made meanwhile (such as a rename).
 
