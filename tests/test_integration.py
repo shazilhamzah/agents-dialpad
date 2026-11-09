@@ -1430,48 +1430,55 @@ def test_run_schedule_now_route(env):
         assert chat["messages"][0]["text"] == "Run now prompt"
 
 
-# --------------------------------------------------------------------------- C5 compare agents
-def test_group_chats_are_linked_and_listed(env):
+# --------------------------------------------------------------------------- D1 remove compare
+def test_groups_api_is_gone(env):
     client, h = env()
     with client:
-        gid = "1234abcd"
-        r1 = client.post("/api/chats", headers=h, json={"provider": "claude", "project": "workspace", "group": gid})
-        r2 = client.post("/api/chats", headers=h, json={"provider": "antigravity", "project": "workspace", "group": gid})
-        assert r1.status_code == 200 and r2.status_code == 200
-        cid1, cid2 = r1.json()["id"], r2.json()["id"]
+        assert client.get("/api/groups/abcd1234", headers=h).status_code == 404
 
-        # Group endpoint returns both
-        res = client.get(f"/api/groups/{gid}", headers=h)
+
+def test_old_clients_sending_group_still_get_a_normal_chat(env):
+    client, h = env()
+    with client:
+        r = client.post("/api/chats", headers=h, json={"provider": "claude", "project": "workspace", "group": "abcd1234"})
+        assert r.status_code == 200
+        chat = r.json()
+        assert "group" not in chat
+        loaded = client.get(f"/api/chats/{chat['id']}", headers=h).json()
+        assert "group" not in loaded
+
+
+def test_chats_from_old_compare_groups_still_list(env, tmp_path):
+    client, h = env()
+    with client:
+        cid = "a" * 32
+        chat_data = {
+            "id": cid,
+            "title": "Old compare chat",
+            "provider": "claude",
+            "project": "workspace",
+            "mode": "readonly",
+            "model": "",
+            "group": "abcd1234",
+            "session_id": None,
+            "pinned": False,
+            "created": time.time(),
+            "updated": time.time(),
+            "messages": [],
+        }
+        chats_dir = tmp_path / "chats"
+        chats_dir.mkdir(parents=True, exist_ok=True)
+        (chats_dir / f"{cid}.json").write_text(json.dumps(chat_data), encoding="utf-8")
+
+        res = client.get("/api/chats", headers=h)
         assert res.status_code == 200
-        chats = res.json()["chats"]
-        assert {c["id"] for c in chats} == {cid1, cid2}
+        found = [c for c in res.json()["chats"] if c["id"] == cid]
+        assert len(found) == 1
+        assert "group" not in found[0]
 
-        # Chats list includes group field
-        chat_list = client.get("/api/chats", headers=h).json()["chats"]
-        group_chats = [c for c in chat_list if c.get("group") == gid]
-        assert len(group_chats) == 2
-
-        # Deleting group deletes both
-        del_res = client.delete(f"/api/groups/{gid}", headers=h)
-        assert del_res.status_code == 200
-        assert set(del_res.json()["deleted"]) == {cid1, cid2}
-        assert client.get(f"/api/groups/{gid}", headers=h).status_code == 404
-
-
-def test_group_id_is_validated(env):
-    client, h = env()
-    with client:
-        for bad_gid in ["toolong1234", "short", "not_hex!", "1234-567"]:
-            assert client.post("/api/chats", headers=h, json={"provider": "claude", "project": "workspace", "group": bad_gid}).status_code == 400
-            assert client.get(f"/api/groups/{bad_gid}", headers=h).status_code == 400
-            assert client.delete(f"/api/groups/{bad_gid}", headers=h).status_code == 400
-
-
-def test_unknown_group_is_404(env):
-    client, h = env()
-    with client:
-        assert client.get("/api/groups/00000000", headers=h).status_code == 404
-        assert client.delete("/api/groups/00000000", headers=h).status_code == 404
+        get_res = client.get(f"/api/chats/{cid}", headers=h)
+        assert get_res.status_code == 200
+        assert get_res.json()["title"] == "Old compare chat"
 
 
 # --------------------------------------------------------------------------- C6 project instructions
@@ -1500,16 +1507,6 @@ def test_per_project_instructions_integration(env, calls, tmp_path):
 
 
 
-
-
-def test_compare_group_holds_two_chats(env):
-    client, h = env()
-    with client:
-        gid = "abcd1234"
-        for prov in ("claude", "antigravity"):
-            assert client.post("/api/chats", headers=h, json={"provider": prov, "project": "workspace", "group": gid}).status_code == 200
-        r = client.post("/api/chats", headers=h, json={"provider": "codex", "project": "workspace", "group": gid})
-        assert r.status_code == 409
 
 
 def test_bad_upload_content_length_is_a_400(env):

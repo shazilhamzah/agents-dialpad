@@ -24,7 +24,6 @@ from .store import Store
 
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:\-\[\]/]{0,100}")  # never starts with '-': it is passed as an argument
 REQ_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
-GROUP_RE = re.compile(r"^[0-9a-f]{8}$")
 
 BASE_MODES = [
     {"id": "readonly", "label": "Read-only (plan)"},
@@ -43,7 +42,6 @@ class NewChat(BaseModel):
     project: str
     mode: str = "readonly"
     model: str = ""
-    group: str | None = None
 
 
 class ChatPatch(BaseModel):
@@ -427,8 +425,6 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
 
     @api.post("/chats")
     async def create_chat(body: NewChat):
-        if body.group is not None and not GROUP_RE.match(body.group):
-            raise HTTPException(400, "Invalid group ID format")
         prov = PROVIDERS.get(body.provider)
         if not prov or not prov.available():
             raise HTTPException(400, f"Provider '{body.provider}' is not available")
@@ -439,47 +435,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
         if body.mode == "ask" and not getattr(prov, "supports_ask", False):
             raise HTTPException(400, f"{prov.label} can't ask before commands yet")
         await check_model(prov, body.model)
-        if body.group is not None and sum(1 for c in store.list() if c.get("group") == body.group) >= 2:
-            raise HTTPException(409, "A compare group holds two chats")
-        return store.create(body.provider, body.project, body.mode, body.model, group=body.group)
-
-    @api.get("/groups/{group}")
-    def get_group(group: str):
-        if not GROUP_RE.match(group):
-            raise HTTPException(400, "Invalid group ID format")
-        all_chats = store.list()
-        matched = [c for c in all_chats if c.get("group") == group]
-        if not matched:
-            raise HTTPException(404, "No such group")
-        chats = []
-        for summary in matched:
-            chat = store.get(summary["id"])
-            run = runs.active(chat["id"])
-            if run and chat["messages"] and chat["messages"][-1].get("run_id") == run.id:
-                chat["messages"].pop()
-            chat["running"] = run is not None
-            chats.append(chat)
-        return {"group": group, "chats": chats}
-
-    @api.delete("/groups/{group}")
-    async def delete_group(group: str):
-        if not GROUP_RE.match(group):
-            raise HTTPException(400, "Invalid group ID format")
-        all_chats = store.list()
-        matched = [c for c in all_chats if c.get("group") == group]
-        if not matched:
-            raise HTTPException(404, "No such group")
-        deleted = []
-        for summary in matched:
-            cid = summary["id"]
-            run = runs.active(cid)
-            if run:
-                run.stopped = True
-                run.kill()
-            store.delete(cid)
-            uploads.remove_all(cid)
-            deleted.append(cid)
-        return {"deleted": deleted}
+        return store.create(body.provider, body.project, body.mode, body.model)
 
     quick_locks: dict[str, asyncio.Lock] = {}
 

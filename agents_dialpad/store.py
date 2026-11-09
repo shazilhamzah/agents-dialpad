@@ -21,7 +21,7 @@ class Store:
             raise KeyError(chat_id)
         return self.dir / f"{chat_id}.json"
 
-    def create(self, provider: str, project: str, mode: str, model: str = "", group: str | None = None) -> dict:
+    def create(self, provider: str, project: str, mode: str, model: str = "") -> dict:
         now = time.time()
         chat = {
             "id": uuid.uuid4().hex,
@@ -30,7 +30,6 @@ class Store:
             "project": project,
             "mode": mode,
             "model": model,  # "" = the CLI's default
-            "group": group,
             "session_id": None,
             "pinned": False,
             "created": now,
@@ -70,7 +69,7 @@ class Store:
                 c = json.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            item = {k: c.get(k) for k in ("id", "title", "provider", "project", "mode", "updated", "group")}
+            item = {k: c.get(k) for k in ("id", "title", "provider", "project", "mode", "updated")}
             item["pinned"] = bool(c.get("pinned"))
             out.append(item)
         out.sort(key=lambda c: (not c["pinned"], -(c["updated"] or 0)))
@@ -121,7 +120,7 @@ class Store:
             if end < len(match_text):
                 collapsed = collapsed + "…"
 
-            item = {k: c.get(k) for k in ("id", "title", "provider", "project", "mode", "updated", "group")}
+            item = {k: c.get(k) for k in ("id", "title", "provider", "project", "mode", "updated")}
             item["pinned"] = bool(c.get("pinned"))
             item["snippet"] = collapsed
             out.append(item)

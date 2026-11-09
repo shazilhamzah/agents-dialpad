@@ -88,9 +88,9 @@ Tips for the person supervising:
 - [x] C2 Codex
 - [x] C3 Usage and alerts
 - [x] C4 Scheduled prompts
-- [x] C5 Compare agents (to be removed by D1)
+- [x] C5 Compare agents (removed by D1)
 - [x] C6 Per-project instructions
-- [ ] D1 Remove compare
+- [x] D1 Remove compare
 - [ ] D2 Full command on approval cards
 - [ ] D3 Codex readiness
 - [ ] D4 Allow / Deny from the notification

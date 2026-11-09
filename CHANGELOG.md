@@ -36,6 +36,9 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 - `docs/remote-access.md`: Tailscale, Cloudflare Tunnel with Access, SSH tunnel, and what not to do.
 - `AG_CLAUDE_ARGS` / `AG_AGY_ARGS` to put arguments after an agent executable (wrappers, tests).
 
+### Removed
+- Removed: the compare-agents view. Chats created with it remain as normal chats.
+
 ### Changed
 - The Python package is now `agents_dialpad` (was `gateway`); run it with `agents-dialpad` or `python -m agents_dialpad`.
 - Relative project paths in `config.json` are now relative to the data folder.

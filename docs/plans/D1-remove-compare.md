@@ -87,7 +87,7 @@ quickly keeps each chat's draft; an old `#/g/abcd1234` URL lands on the list; no
 
 ## Acceptance checklist
 
-- [ ] No compare UI, route or API remains (`git grep -n -i compare -- agents_dialpad` finds nothing).
-- [ ] Old compare chats still open as normal chats.
-- [ ] A cached old app that sends `group` can still start a chat.
-- [ ] All tests pass on Windows, macOS and Linux CI.
+- [x] No compare UI, route or API remains (`git grep -n -i compare -- agents_dialpad` finds nothing).
+- [x] Old compare chats still open as normal chats.
+- [x] A cached old app that sends `group` can still start a chat.
+- [x] All tests pass on Windows, macOS and Linux CI.

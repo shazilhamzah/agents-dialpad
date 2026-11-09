@@ -93,9 +93,7 @@ function forgetToken() { LS.del('ag_token'); token = null; }
 
 /* ===================== state ===================== */
 const state = { chats: [], sig: '', info: null, drafts: {}, openTools: new Set(), query: '', quick: {} };
-let cur = null;           // the open single-chat view (see createChatView)
-let curGroup = null;      // open compare group ID if in compare view
-let activeViews = [];     // all active chat views (1 for single chat, 2 for compare)
+let cur = null;           // the open chat view (see createChatView)
 
 /* ===================== sheets, menu, confirm ===================== */
 function openSheet(html, label) {
@@ -458,8 +456,6 @@ function renderList() {
     return;
   }
   const activeId = cur && cur.chat.id;
-  const activeGid = curGroup;
-  const seenGroups = new Set();
   const chatRow = (c) => `
     <a class="chat-row" href="#/c/${c.id}"${c.id === activeId ? ' aria-current="page"' : ''}>
       <span class="t"><span class="title">${esc(c.title)}</span>
@@ -467,30 +463,8 @@ function renderList() {
       ${c.pinned ? `<span class="pin-badge" aria-hidden="true">${icon('pin')}</span>` : ''}
       ${c.running ? '<span class="dot" role="img" aria-label="Running"></span>' : ''}
     </a>`;
-  const groupRow = (c) => {
-    const groupChats = state.chats.filter((x) => x.group === c.group);
-    const isRunning = groupChats.some((x) => x.running);
-    const maxUpdated = Math.max(...groupChats.map((x) => x.updated || 0));
-    const title = c.title === 'New chat' ? 'New chat' : c.title.replace(/^Compare:\s*/, '');
-    return `
-      <a class="chat-row" href="#/g/${esc(c.group)}"${activeGid === c.group ? ' aria-current="page"' : ''}>
-        <span class="t"><span class="title">Compare: ${esc(title)}</span>
-        <span class="meta">${esc(c.project)} · ${esc(timeAgo(maxUpdated))}</span></span>
-        ${isRunning ? '<span class="dot" role="img" aria-label="Running"></span>' : ''}
-      </a>`;
-  };
 
-  // One row per chat, one row per compare group; pinned single chats first.
-  const items = [];
-  for (const c of state.chats) {
-    if (c.group) {
-      if (seenGroups.has(c.group)) continue;
-      seenGroups.add(c.group);
-      items.push({ pinned: false, html: groupRow(c) });
-    } else {
-      items.push({ pinned: !!c.pinned, html: chatRow(c) });
-    }
-  }
+  const items = state.chats.map((c) => ({ pinned: !!c.pinned, html: chatRow(c) }));
   const pinned = items.filter((i) => i.pinned);
   const recent = items.filter((i) => !i.pinned);
   let html = '';
@@ -549,13 +523,7 @@ async function openNewChat() {
   const first = avail[0] || info.providers[0];
   const isClaude = (first && first.name === 'claude');
   const firstModes = (first && first.modes) ? first.modes : info.modes;
-  let provOptions = info.providers.map((p) => `<option value="${esc(p.name)}"${p.available ? '' : ' disabled'}>${esc(p.label)}${p.available ? '' : ' (not yet)'}</option>`).join('');
-  // Compare: one option per pair of available agents (the compare view shows two side by side).
-  const pairs = [];
-  avail.forEach((a, i) => avail.slice(i + 1).forEach((b) => pairs.push([a, b])));
-  provOptions += pairs.map(([a, b]) =>
-    `<option value="__cmp__:${esc(a.name)},${esc(b.name)}">Compare: ${esc(a.label)} + ${esc(b.label)}</option>`).join('');
-  const pairOf = (val) => val.startsWith('__cmp__:') ? val.slice(8).split(',').map((n) => avail.find((p) => p.name === n)) : null;
+  const provOptions = info.providers.map((p) => `<option value="${esc(p.name)}"${p.available ? '' : ' disabled'}>${esc(p.label)}${p.available ? '' : ' (not yet)'}</option>`).join('');
   const dlg = openSheet(`<form id="f-new"><h2>New chat</h2>
     <label for="n-prov">Agent</label>
     <select id="n-prov">${provOptions}</select>
@@ -569,17 +537,11 @@ async function openNewChat() {
     <button class="btn secondary" type="button" id="btn-continue-desk" style="width: 100%; margin-top: 12px;" ${isClaude ? '' : 'hidden'}>Continue a desktop session</button>
   </form>`, 'New chat');
   $('[data-close]', dlg).onclick = () => dlg.close();
-  // Permission levels both agents of a compare pair support.
-  const sharedModes = (pair) => info.modes.filter((m) => pair.every((p) => !p.modes || p.modes.some((x) => x.id === m.id)));
   $('#n-prov', dlg).onchange = () => {
     const val = $('#n-prov', dlg).value;
-    const pair = pairOf(val);
-    const isBoth = !!pair;
     const prov = info.providers.find((p) => p.name === val);
-    $('#lbl-model', dlg).hidden = isBoth;
-    $('#n-model', dlg).hidden = isBoth;
-    if (!isBoth) $('#n-model', dlg).innerHTML = modelOptions(prov, '');
-    const pModes = isBoth ? sharedModes(pair) : ((prov && prov.modes) ? prov.modes : info.modes);
+    $('#n-model', dlg).innerHTML = modelOptions(prov, '');
+    const pModes = (prov && prov.modes) ? prov.modes : info.modes;
     $('#n-mode', dlg).innerHTML = pModes.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
     $('#btn-continue-desk', dlg).hidden = val !== 'claude';
   };
@@ -596,32 +558,15 @@ async function openNewChat() {
     const project = $('#n-proj', dlg).value;
     const mode = $('#n-mode', dlg).value;
     try {
-      const pair = pairOf(prov);
-      if (pair) {
-        const bytes = new Uint8Array(4);
-        crypto.getRandomValues(bytes);
-        const gid = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-        await Promise.all(pair.map((p) => postJSON('/chats', {
-          provider: p.name,
-          project,
-          mode,
-          model: '',
-          group: gid,
-        })));
-        dlg.close();
-        location.hash = '#/g/' + gid;
-        refreshList();
-      } else {
-        const chat = await postJSON('/chats', {
-          provider: prov,
-          model: $('#n-model', dlg).value,
-          project,
-          mode,
-        });
-        dlg.close();
-        location.hash = '#/c/' + chat.id;
-        refreshList();
-      }
+      const chat = await postJSON('/chats', {
+        provider: prov,
+        model: $('#n-model', dlg).value,
+        project,
+        mode,
+      });
+      dlg.close();
+      location.hash = '#/c/' + chat.id;
+      refreshList();
     } catch (err) { go.removeAttribute('aria-busy'); handleErr(err); }
   };
 }
@@ -859,14 +804,9 @@ function showEmptyPane() {
 function teardownChat() {
   closeMenu();
   const input = $('#input');
-  if (input) {
-    if (cur && cur.chat) state.drafts[cur.chat.id] = input.value;
-    else if (curGroup) state.drafts['group_' + curGroup] = input.value;
-  }
-  activeViews.forEach((v) => v.destroy());
-  activeViews = [];
+  if (input && cur && cur.chat) state.drafts[cur.chat.id] = input.value;
+  if (cur) cur.destroy();
   cur = null;
-  curGroup = null;
 }
 
 function createChatView(chat, els) {
@@ -882,7 +822,7 @@ function createChatView(chat, els) {
 
     renderThread() {
       if (!this.els.thread) return;
-      this.els.thread.dataset.chatId = this.chat.id;       // lets approval buttons find their chat (also in compare view)
+      this.els.thread.dataset.chatId = this.chat.id;       // lets approval buttons find their chat
       let topNote = '';
       if (this.chat.imported && (!this.chat.messages || this.chat.messages.length === 0)) {
         topNote = '<div class="thread-note">Continued from a session on the computer. Earlier messages stay there, but the agent remembers them.</div>';
@@ -921,13 +861,13 @@ function createChatView(chat, els) {
     },
 
     setRunning(on) {
-      if (this.els.send && activeViews.length <= 1) {
+      if (this.els.send) {
         this.els.send.classList.toggle('stop', on);
         this.els.send.setAttribute('aria-label', on ? 'Stop' : 'Send');
         this.els.send.innerHTML = icon(on ? 'stop' : 'up');
       }
       const shell = $('.shell');
-      if (shell && activeViews.length <= 1) shell.dataset.running = on ? 'true' : 'false';
+      if (shell) shell.dataset.running = on ? 'true' : 'false';
       if (this.els.msgs) this.els.msgs.setAttribute('aria-busy', on ? 'true' : 'false');
       if (this.onRunningChange) this.onRunningChange(on);
     },
@@ -1038,9 +978,8 @@ async function openChat(id) {
   }
   buildPane(chat);
   cur = createChatView(chat, { msgs: $('#msgs'), thread: $('#thread'), jump: $('#jump'), send: $('#send'), sr: $('#sr') });
-  cur.pending = [];       // attachments waiting to be sent (single-chat view only)
+  cur.pending = [];       // attachments waiting to be sent
   cur.uploading = 0;
-  activeViews = [cur];
   state.openTools = new Set();
   cur.renderThread();
   cur.scrollToEnd(true);
@@ -1497,148 +1436,7 @@ async function deleteChat() {
   delete state.drafts[id]; location.hash = '#/'; refreshList();
 }
 
-/* ===================== compare view ===================== */
-async function openGroup(gid) {
-  if (curGroup === gid && $('#col-0')) return;
-  teardownChat();
-  let data;
-  try { data = await getJSON('/groups/' + gid); } catch (e) { location.hash = '#/'; return handleErr(e); }
-  if (location.hash !== '#/g/' + gid) return;
-  curGroup = gid;
-  const chats = data.chats;
-  if (!chats || chats.length < 2) { location.hash = '#/'; return; }
 
-  buildGroupPane(chats, gid);
-
-  const view0 = createChatView(chats[0], { msgs: $('#msgs-0'), thread: $('#thread-0'), jump: $('#jump-0'), send: $('#send'), sr: $('#sr') });
-  const view1 = createChatView(chats[1], { msgs: $('#msgs-1'), thread: $('#thread-1'), jump: $('#jump-1'), send: $('#send'), sr: $('#sr') });
-  activeViews = [view0, view1];
-  state.openTools = new Set();
-
-  const updateGroupRunning = () => {
-    const isRunning = activeViews.some((v) => v.live || (v.chat && v.chat.running));
-    const shell = $('.shell'); if (shell) shell.dataset.running = isRunning ? 'true' : 'false';
-    const b = $('#send');
-    if (b) {
-      b.classList.toggle('stop', isRunning);
-      b.setAttribute('aria-label', isRunning ? 'Stop' : 'Send');
-      b.innerHTML = icon(isRunning ? 'stop' : 'up');
-    }
-    const d0 = $('#dot-0'), d1 = $('#dot-1');
-    if (d0) d0.hidden = !(view0.live || (view0.chat && view0.chat.running));
-    if (d1) d1.hidden = !(view1.live || (view1.chat && view1.chat.running));
-  };
-
-  view0.onRunningChange = updateGroupRunning;
-  view1.onRunningChange = updateGroupRunning;
-
-  view0.renderThread(); view0.scrollToEnd(true);
-  view1.renderThread(); view1.scrollToEnd(true);
-  updateGroupRunning();
-  renderList();
-
-  if (chats[0].running) view0.attach();
-  if (chats[1].running) view1.attach();
-}
-
-function buildGroupPane(chats, gid) {
-  const c0 = chats[0], c1 = chats[1];
-  $('#pane').innerHTML = `
-    <header class="bar">
-      <a class="icon-btn back" href="#/" aria-label="Back to chats">${icon('back')}</a>
-      <div class="titles"><h2>Compare</h2><span class="sub">${esc(c0.project)} · ${esc(MODE_TEXT[c0.mode] || c0.mode)}</span></div>
-      <button class="icon-btn" id="btn-more" type="button" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">${icon('more')}</button>
-    </header>
-    <div class="tabs-bar" role="tablist">
-      <button class="tab-btn active" role="tab" id="tab-btn-0" type="button">${esc(providerLabel(c0.provider))} <span class="tab-dot" id="dot-0" hidden></span></button>
-      <button class="tab-btn" role="tab" id="tab-btn-1" type="button">${esc(providerLabel(c1.provider))} <span class="tab-dot" id="dot-1" hidden></span></button>
-    </div>
-    <div class="compare">
-      <div class="col" id="col-0">
-        <div class="col-head"><h3>${esc(providerLabel(c0.provider))}</h3></div>
-        <div class="msgs" id="msgs-0" role="log" aria-label="${esc(providerLabel(c0.provider))} conversation">
-          <div class="thread" id="thread-0"></div>
-          <button class="icon-btn jump" id="jump-0" type="button" aria-label="Scroll to latest message" hidden>${icon('down')}</button>
-        </div>
-      </div>
-      <div class="col" id="col-1" hidden>
-        <div class="col-head"><h3>${esc(providerLabel(c1.provider))}</h3></div>
-        <div class="msgs" id="msgs-1" role="log" aria-label="${esc(providerLabel(c1.provider))} conversation">
-          <div class="thread" id="thread-1"></div>
-          <button class="icon-btn jump" id="jump-1" type="button" aria-label="Scroll to latest message" hidden>${icon('down')}</button>
-        </div>
-      </div>
-    </div>
-    <div class="sr" id="sr" role="status"></div>
-    <form class="composer" id="composer" autocomplete="off"><div class="composer-in">
-      <div class="row">
-        <div class="field"><label class="sr" for="input">Message</label>
-          <textarea id="input" rows="1" placeholder="Message both agents" enterkeyhint="send"></textarea></div>
-        <button class="send" id="send" type="submit" aria-label="Send">${icon('up')}</button>
-      </div>
-    </div></form>`;
-
-  const selectTab = (idx) => {
-    $('#tab-btn-0').classList.toggle('active', idx === 0);
-    $('#tab-btn-1').classList.toggle('active', idx === 1);
-    $('#col-0').hidden = (idx !== 0);
-    $('#col-1').hidden = (idx !== 1);
-    if (activeViews[idx]) activeViews[idx].scrollToEnd(false);
-  };
-  $('#tab-btn-0').onclick = () => selectTab(0);
-  $('#tab-btn-1').onclick = () => selectTab(1);
-
-  $('#btn-more').onclick = (e) => {
-    if ($('#menu')) return closeMenu();
-    const items = [
-      { icon: 'gauge', label: 'Usage limits', run: openLimits },
-    ];
-    if (state.info && state.info.has_schedules) {
-      items.push({ icon: 'clock', label: 'Schedules', run: openSchedules });
-    }
-    items.push({ icon: 'trash', label: 'Delete both', danger: true, run: () => deleteGroup(gid) });
-    openMenu(e.currentTarget, items);
-  };
-
-  const input = $('#input');
-  input.value = state.drafts['group_' + gid] || '';
-  $('.field').addEventListener('click', (e) => { if (e.target === e.currentTarget) input.focus(); });
-  input.addEventListener('input', autosize);
-  input.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || e.isComposing) return;
-    const send = e.ctrlKey || e.metaKey || (!e.shiftKey && matchMedia('(pointer: fine)').matches);
-    if (send) {
-      e.preventDefault();
-      const running = activeViews.some((v) => v.live || (v.chat && v.chat.running));
-      if (!running) sendMessage(activeViews);
-    }
-  });
-  $('#composer').onsubmit = (e) => {
-    e.preventDefault();
-    const running = activeViews.some((v) => v.live || (v.chat && v.chat.running));
-    if (running) activeViews.forEach((v) => v.stop());
-    else sendMessage(activeViews);
-  };
-  autosize();
-}
-
-async function deleteGroup(gid) {
-  const ok = await confirmSheet({
-    title: 'Delete both chats?',
-    body: 'Both conversations in this comparison are removed from this computer. This can’t be undone.',
-    confirm: 'Delete both',
-    danger: true,
-  });
-  if (!ok) return;
-  try {
-    await api('/groups/' + gid, { method: 'DELETE' });
-    delete state.drafts['group_' + gid];
-    location.hash = '#/';
-    refreshList();
-  } catch (e) {
-    handleErr(e);
-  }
-}
 
 /* ---- rendering ---- */
 function toolArg(input) {
@@ -1734,57 +1532,46 @@ function msgHTML(m) {
 }
 
 /* ---- sending + streaming ---- */
-async function sendMessage(views) {
-  if (!views) views = activeViews;
-  if (!Array.isArray(views)) views = [views];
-  views = views.filter((v) => v && !v.live);
-  if (!views.length) return;
-  if (views.some((v) => v.uploading > 0)) return;            // wait for attachments to finish uploading
+async function sendMessage(view) {
+  if (!view) view = cur;
+  if (!view || view.live) return;
+  if (view.uploading > 0) return;            // wait for attachments to finish uploading
   const input = $('#input');
   let text = input.value.trim();
-  // Attachments only exist in the single-chat view (the compare view has no paperclip).
-  const single = views.length === 1 ? views[0] : null;
-  const pending = (single && single.pending) || [];
+  const pending = view.pending || [];
   const attachments = pending.filter((p) => !p.loading && p.name).map((p) => p.name);
   const labels = pending.filter((p) => !p.loading && p.name).map((p) => p.label || p.name);
   if (!text && !attachments.length) return;
   if (!text) text = 'See the attached files.';
   pending.forEach((p) => { if (p.url) URL.revokeObjectURL(p.url); });
-  if (single) single.pending = [];
+  view.pending = [];
   const attRow = $('#attachments');
   if (attRow) { attRow.innerHTML = ''; attRow.hidden = true; }
   input.value = '';
-  views.forEach((v) => {
-    delete state.drafts[v.chat.id];
-    if (v.chat.group) delete state.drafts['group_' + v.chat.group];
-  });
+  delete state.drafts[view.chat.id];
   autosize();
 
-  for (const v of views) {
-    v.chat.messages.push({ role: 'user', text, attachments: v === single ? labels : [] });
-    v.renderThread();
-    v.scrollToEnd(true);
-  }
+  view.chat.messages.push({ role: 'user', text, attachments: labels });
+  view.renderThread();
+  view.scrollToEnd(true);
 
-  await Promise.all(views.map(async (v) => {
-    try {
-      const body = v === single && attachments.length ? { text, attachments } : { text };
-      await api(`/chats/${v.chat.id}/messages`, { method: 'POST', body: JSON.stringify(body) });
-      v.attach();
-    } catch (e) {
-      if (e instanceof AuthError) return handleErr(e);
-      toast(e.message);
-      input.value = text;
-      autosize();
-      try { v.chat = await getJSON('/chats/' + v.chat.id); v.renderThread(); } catch {}
-    }
-  }));
+  try {
+    const body = attachments.length ? { text, attachments } : { text };
+    await api(`/chats/${view.chat.id}/messages`, { method: 'POST', body: JSON.stringify(body) });
+    view.attach();
+  } catch (e) {
+    if (e instanceof AuthError) return handleErr(e);
+    toast(e.message);
+    input.value = text;
+    autosize();
+    try { view.chat = await getJSON('/chats/' + view.chat.id); view.renderThread(); } catch {}
+  }
 }
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   refreshList();
-  activeViews.forEach((v) => { if (v.live || (v.chat && v.chat.running)) v.recover(); });
+  if (cur && (cur.live || (cur.chat && cur.chat.running))) cur.recover();
 });
 
 /* ---- copy buttons on code blocks ---- */
@@ -1801,7 +1588,7 @@ document.addEventListener('click', async (e) => {
   if (!b || b.disabled) return;
   const reqId = b.dataset.approve;
   const allow = b.dataset.allow === '1';
-  // Find the chat this card belongs to: works in the single view and in either column of the compare view.
+  // Find the chat this card belongs to:
   const host = b.closest('[data-chat-id]');
   const chatId = host ? host.dataset.chatId : (cur && cur.chat && cur.chat.id);
   if (!chatId) return;
@@ -1847,13 +1634,9 @@ async function route() {
   mountShell();
   const shell = $('.shell');
   const mc = location.hash.match(/^#\/c\/([0-9a-f]{32})$/);
-  const mg = location.hash.match(/^#\/g\/([0-9a-f]{8})$/);
   if (mc) {
     shell.dataset.view = 'chat';
     await openChat(mc[1]);
-  } else if (mg) {
-    shell.dataset.view = 'chat';
-    await openGroup(mg[1]);
   } else {
     shell.dataset.view = 'list';
     teardownChat();

@@ -1,5 +1,7 @@
 # C5. Ask two agents at once
 
+> **Note:** Removed in D1. Kept for history.
+
 - **Size:** M–L (two parts)
 - **Needs first:** A3
 - **Branches:** `refactor/c5-chat-view`, then `feat/c5-compare`
