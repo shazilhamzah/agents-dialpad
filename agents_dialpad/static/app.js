@@ -43,6 +43,7 @@ const ICON = {
   phone: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  fingerprint: '<path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 3M14 13.12c0 2.38 0 6.38-1 8.88M2 12a10 10 0 0 1 18-6M2 16a14.66 14.66 0 0 1 3-4M22 12A10 10 0 0 0 12 2a10 10 0 0 0-6.88 2.77M17 13.5a6 6 0 0 0-5-5.5M19 17.5a14 14 0 0 0 .5-3.5M6 21a10 10 0 0 1-.5-3.5c0-1.78.33-3.5 1-5"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[n]}</svg>`;
 
@@ -263,7 +264,7 @@ function mountShell() {
         <button class="icon-btn" id="btn-sched" type="button" aria-label="Schedules" style="display:none">${icon('clock')}</button>
         <button class="icon-btn" id="btn-limits" type="button" aria-label="Usage limits">${icon('gauge')}</button>
         <button class="icon-btn" id="btn-side-more" type="button" aria-label="More" aria-haspopup="menu" aria-expanded="false">${icon('more')}</button>
-        <button class="icon-btn solid" id="btn-new" type="button" aria-label="New chat">${icon('plus')}</button>
+        <button class="icon-btn" id="btn-new" type="button" aria-label="New chat">${icon('plus')}</button>
       </header>
       <div class="search">${icon('search')}<label class="sr" for="q">Search chats</label><input id="q" type="search" placeholder="Search chats" autocomplete="off" enterkeyhint="search"></div>
       <nav class="chats" id="chat-list" aria-label="Chat list"></nav>
@@ -530,10 +531,14 @@ function ensureLockOverlay() {
   overlay.setAttribute('hidden', '');
   overlay.innerHTML = `
     <div class="lock-card">
-      <img src="/logo-mark.svg" alt="" class="lock-icon" width="72" height="72">
+      <div class="lock-badge">
+        <img src="/logo-mark.svg" alt="" class="lock-icon" width="52" height="52">
+      </div>
       <h2>Locked</h2>
-      <p class="lock-msg">Unlock to continue.</p>
-      <button id="btn-unlock" class="btn primary" type="button">Unlock</button>
+      <p class="lock-msg" id="lock-msg">Unlock to continue.</p>
+      <button id="btn-unlock" class="btn primary" type="button">
+        ${icon('fingerprint')}<span>Unlock</span>
+      </button>
     </div>
   `;
   document.body.appendChild(overlay);
@@ -547,6 +552,7 @@ function promptUnlock() {
   document.body.classList.add('is-locked');
   overlay.removeAttribute('hidden');
   const btn = $('#btn-unlock');
+  const msg = $('#lock-msg');
   try {
     if (window.matchMedia && !window.matchMedia('(pointer: coarse)').matches) {
       btn.focus({ focusVisible: false });
@@ -557,7 +563,9 @@ function promptUnlock() {
     async function doUnlock() {
       try {
         btn.disabled = true;
-        btn.textContent = 'Unlocking...';
+        btn.innerHTML = `<span class="spin"></span><span>Waiting for fingerprint or PIN…</span>`;
+        if (msg) msg.textContent = 'Touch your fingerprint sensor or enter device PIN…';
+
         const optsRes = await fetch('/api/lock/unlock/options', {
           method: 'POST',
           headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
@@ -617,10 +625,12 @@ function promptUnlock() {
         }
       } finally {
         btn.disabled = false;
-        btn.textContent = 'Unlock';
+        btn.innerHTML = `${icon('fingerprint')}<span>Unlock</span>`;
+        if (msg) msg.textContent = 'Unlock to continue.';
       }
     }
-    btn.onclick = doUnlock;
+    btn.onclick = () => doUnlock();
+    doUnlock();
   }).finally(() => {
     activeUnlockPromise = null;
   });
@@ -809,9 +819,14 @@ function renderList() {
   const list = $('#chat-list'); if (!list) return;
   if (state.query) return;
   if (!state.chats.length) {
-    list.innerHTML = `<div class="empty">${icon('chat')}<p><b>No chats yet</b></p>
-      <p>Start one to talk to an agent running on this computer.</p><button class="btn" id="empty-new" type="button">New chat</button></div>`;
-    $('#empty-new').onclick = openNewChat;
+    list.innerHTML = `<div class="empty">
+      ${icon('chat')}
+      <p><b>No chats yet</b></p>
+      <p class="empty-sub">Conversations with local agents will appear here.</p>
+      <button class="btn primary phone-only" id="empty-new" type="button">Start a chat</button>
+    </div>`;
+    const btn = $('#empty-new');
+    if (btn) btn.onclick = openNewChat;
     return;
   }
   const activeId = cur && cur.chat.id;
@@ -858,7 +873,12 @@ async function refreshList() {
   try {
     const d = await getJSON('/chats');
     const sig = JSON.stringify(d.chats);
-    if (sig !== state.sig) { state.sig = sig; state.chats = d.chats; renderList(); }
+    if (sig !== state.sig) {
+      state.sig = sig;
+      state.chats = d.chats;
+      renderList();
+      if (!cur) showEmptyPane();
+    }
   } catch (e) {
     if (e instanceof AuthError) { forgetToken(); showLogin('That token was rejected. Paste the current one.'); }
   }
@@ -1127,9 +1147,25 @@ function handleErr(e) {
 /* ===================== conversation ===================== */
 function showEmptyPane() {
   const pane = $('#pane'); if (!pane) return;
-  pane.innerHTML = `<div class="empty">${icon('chat')}<p><b>Pick a chat</b></p><p>Choose one from the list, or start a new one.</p>
-    <button class="btn" id="pane-new" type="button">New chat</button></div>`;
-  $('#pane-new').onclick = openNewChat;
+  if (!state.chats.length) {
+    pane.innerHTML = `
+      <div class="empty empty-hero">
+        <div class="empty-badge">
+          <img src="/logo-mark.svg" alt="" class="empty-logo" width="44" height="44">
+        </div>
+        <h2 class="empty-title">agents-dialpad</h2>
+        <p class="empty-sub">Pick up the line to an agent running on this computer.</p>
+        <button class="btn primary" id="pane-new" type="button">Start a chat</button>
+      </div>`;
+    $('#pane-new').onclick = openNewChat;
+  } else {
+    pane.innerHTML = `
+      <div class="empty">
+        ${icon('chat')}
+        <p><b>Pick a conversation</b></p>
+        <p class="empty-sub">Choose a chat from the sidebar to continue.</p>
+      </div>`;
+  }
   const shell = $('.shell'); if (shell) shell.dataset.running = 'false';
 }
 
