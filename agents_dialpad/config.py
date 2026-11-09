@@ -123,6 +123,7 @@ def load() -> tuple[dict, str]:
         except ValueError:
             pass
     cfg.setdefault("push_show_titles", False)
+    cfg.setdefault("push_show_commands", False)
     cfg.setdefault("push_contact", "mailto:agents-dialpad@example.com")
     from . import quick
     cfg["quick_commands"], cfg["_quick_problems"] = quick.normalize(cfg.get("quick_commands"))

@@ -138,6 +138,11 @@ def build_payload(chat: dict, done: dict | None, show_titles: bool) -> dict:
     }
 
 
+def actions_allowed(sub: dict) -> bool:
+    """Check if action buttons should be sent to this subscription. D5 fills this in with app lock check."""
+    return True
+
+
 def send_all(subs: Subscriptions, payload: dict, data_dir: Path, contact: str) -> int:
     """Blocking. Send to every subscription; remove those that answer 404 or 410. Return how many succeeded."""
     try:
@@ -151,10 +156,13 @@ def send_all(subs: Subscriptions, payload: dict, data_dir: Path, contact: str) -
 
     sent = 0
     for sub in subs.all():
+        sub_payload = payload
+        if "approval" in payload and not actions_allowed(sub):
+            sub_payload = {k: v for k, v in payload.items() if k != "approval"}
         try:
             webpush(
                 subscription_info=sub,
-                data=json.dumps(payload),
+                data=json.dumps(sub_payload),
                 vapid_private_key=str(pem_path),
                 vapid_claims={"sub": contact},
                 ttl=3600,

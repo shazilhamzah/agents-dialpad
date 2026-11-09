@@ -284,6 +284,20 @@ svg.i { width: 1.25rem; height: 1.25rem; flex: none; fill: none; stroke: current
 
 /* approvals */
 .approval { margin: .8em 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-m); background: var(--surface); display: flex; flex-direction: column; gap: 10px; }
+.approval.highlight {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+  animation: pulse-highlight 2s ease-out;
+}
+@keyframes pulse-highlight {
+  0% { box-shadow: 0 0 0 4px var(--accent-surface); }
+  100% { box-shadow: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .approval.highlight {
+    animation: none;
+  }
+}
 .approval-title { font-weight: 600; font-size: .9375rem; color: var(--text); }
 .approval-desc { font-size: .875rem; color: var(--text-2); margin: 0; }
 .approval-cmd-box { border: 1px solid var(--line); border-radius: var(--r-s); background: var(--surface-2); overflow: hidden; }

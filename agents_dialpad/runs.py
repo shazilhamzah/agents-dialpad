@@ -36,6 +36,7 @@ class Run:
         self.cond = asyncio.Condition()
         self.pending: dict[str, asyncio.Future] = {}
         self.decided: set[str] = set()
+        self.action_tokens: dict[str, str] = {}
 
     async def wait_decision(self, req_id: str, timeout: float) -> tuple[bool, str]:
         loop = asyncio.get_running_loop()
@@ -44,19 +45,21 @@ class Run:
         try:
             return await asyncio.wait_for(fut, timeout=timeout)
         except asyncio.TimeoutError:
+            self.action_tokens.pop(req_id, None)
             self.decided.add(req_id)
             return (False, "timeout")
         finally:
             self.pending.pop(req_id, None)
 
-    def decide(self, req_id: str, allow: bool) -> bool:
+    def decide(self, req_id: str, allow: bool, by: str = "user") -> bool:
+        self.action_tokens.pop(req_id, None)
         if req_id in self.decided:
             return False
         fut = self.pending.get(req_id)
         if not fut or fut.done():
             return False
         self.decided.add(req_id)
-        fut.set_result((allow, "user"))
+        fut.set_result((allow, by))
         return True
 
     async def emit(self, ev: dict) -> None:
@@ -65,11 +68,13 @@ class Run:
             self.cond.notify_all()
 
     async def finish(self) -> None:
+        self.action_tokens.clear()
         async with self.cond:
             self.done = True
             self.cond.notify_all()
 
     def kill(self) -> None:
+        self.action_tokens.clear()
         self.stopped = True
         for req_id, fut in list(self.pending.items()):
             self.decided.add(req_id)

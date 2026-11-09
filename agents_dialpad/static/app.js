@@ -983,12 +983,15 @@ function createChatView(chat, els) {
   return view;
 }
 
-async function openChat(id) {
-  if (cur && cur.chat.id === id && $('#thread')) return;
+async function openChat(id, approvalReq) {
+  if (cur && cur.chat.id === id && $('#thread')) {
+    if (approvalReq) scrollToApproval(approvalReq);
+    return;
+  }
   teardownChat();
   let chat;
   try { chat = await getJSON('/chats/' + id); } catch (e) { location.hash = '#/'; return handleErr(e); }
-  if (location.hash !== '#/c/' + id) return;                        // the user moved on while we loaded
+  if (location.hash.split('?')[0] !== '#/c/' + id) return;                        // the user moved on while we loaded
   if (state.quick[chat.project] === undefined) {
     try { state.quick[chat.project] = await getJSON('/projects/' + encodeURIComponent(chat.project) + '/commands'); }
     catch { state.quick[chat.project] = []; }
@@ -1000,9 +1003,25 @@ async function openChat(id) {
   state.openTools = new Set();
   state.expandedApprovals = new Set();
   cur.renderThread();
-  cur.scrollToEnd(true);
+  if (approvalReq) {
+    scrollToApproval(approvalReq);
+  } else {
+    cur.scrollToEnd(true);
+  }
   renderList();
   if (chat.running) cur.attach();
+}
+
+function scrollToApproval(reqId) {
+  requestAnimationFrame(() => {
+    const card = document.querySelector(`.approval[data-req-id="${CSS.escape(reqId)}"]`);
+    if (card) {
+      const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      card.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'center' });
+      card.classList.add('highlight');
+      setTimeout(() => card.classList.remove('highlight'), 2000);
+    }
+  });
 }
 
 function buildPane(chat) {
@@ -1543,7 +1562,9 @@ function assistantHTML(events, live) {
       } else {
         let label = 'Denied';
         if (b.result.allow) {
-          label = 'Allowed';
+          label = b.result.by === 'notification' ? 'Allowed from notification' : 'Allowed';
+        } else if (b.result.by === 'notification') {
+          label = 'Denied from notification';
         } else if (b.result.by === 'timeout') {
           label = 'No answer in time, so it was denied';
         } else if (b.result.by === 'stopped') {
@@ -1618,7 +1639,7 @@ function assistantHTML(events, live) {
         ? `<details class="approval-details"><summary>Details</summary><pre class="approval-details-json"><code>${esc(JSON.stringify(rest, null, 2))}</code></pre></details>`
         : '';
 
-      return `<div class="approval"><div class="approval-title">Allow this?</div>${descHtml}${cmdHtml}${fileHtml}${diffLinesHtml}${truncHtml}${detailsHtml}${statusHtml}</div>`;
+      return `<div class="approval" data-req-id="${esc(b.id)}"><div class="approval-title">Allow this?</div>${descHtml}${cmdHtml}${fileHtml}${diffLinesHtml}${truncHtml}${detailsHtml}${statusHtml}</div>`;
     }
     const status = !b.result ? '<span class="st"><span class="spin"></span></span>'
       : b.result.is_error ? `<span class="st err">${icon('x')}</span>` : `<span class="st">${icon('check')}</span>`;
@@ -1747,6 +1768,13 @@ document.addEventListener('click', async (e) => {
       method: 'POST',
       body: JSON.stringify({ allow }),
     });
+    if ('serviceWorker' in navigator) {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const notifs = await reg.getNotifications({ tag: `approval:${chatId}:${reqId}` });
+        notifs.forEach((n) => n.close());
+      } catch {}
+    }
   } catch (err) {
     pendingApprovals.delete(reqId);
     allBtns.forEach((btn) => { btn.disabled = false; });
@@ -1784,10 +1812,11 @@ async function route() {
   if (!token) return showLogin();
   mountShell();
   const shell = $('.shell');
-  const mc = location.hash.match(/^#\/c\/([0-9a-f]{32})$/);
+  const mc = location.hash.match(/^#\/c\/([0-9a-f]{32})(?:\?(.*))?$/);
   if (mc) {
     shell.dataset.view = 'chat';
-    await openChat(mc[1]);
+    const params = new URLSearchParams(mc[2] || '');
+    await openChat(mc[1], params.get('approval'));
   } else {
     shell.dataset.view = 'list';
     teardownChat();

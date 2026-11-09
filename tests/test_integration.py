@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from agents_dialpad import config, pairing
+from agents_dialpad import config, pairing, push
 from agents_dialpad.app import create_app
 from agents_dialpad.keepawake import KeepAwake
 from agents_dialpad.providers import antigravity, codex
@@ -1714,3 +1714,276 @@ def test_unknown_disabled_agent_names_are_reported_by_doctor(env, monkeypatch):
     codex_check = next((c for c in checks if "Codex" in c.label), None)
     assert codex_check is not None
     assert "turned off in config.json" in codex_check.detail
+
+
+# --------------------------------------------------------------------------- D4 Lock-screen approvals
+def _setup_push_sub(client, h):
+    sub = {
+        "endpoint": "https://push.example.com/sub/test-1",
+        "keys": {"p256dh": "test-p256dh-key", "auth": "test-auth-key"},
+    }
+    r = client.post("/api/push/subscribe", headers=h, json={"subscription": sub, "label": "phone"})
+    assert r.status_code == 200
+
+
+def test_push_action_allows_with_the_right_token(env, monkeypatch):
+    captured_payloads = []
+    def mock_send_all(subs, payload, data_dir, contact):
+        captured_payloads.append(payload)
+        return len(subs.all())
+    monkeypatch.setattr(push, "send_all", mock_send_all)
+
+    client, h = env(push_show_commands=True)
+    with client:
+        _setup_push_sub(client, h)
+        cid = new_chat(client, h, mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+
+        end = time.time() + 5
+        while time.time() < end and not any("approval" in p for p in captured_payloads):
+            time.sleep(0.05)
+        payload = next(p for p in captured_payloads if "approval" in p)
+        appr = payload["approval"]
+        assert appr["can_allow"] is True
+
+        # Send push action with NO auth header
+        r = client.post("/push-action", json={
+            "chat": cid,
+            "req": appr["req"],
+            "token": appr["token"],
+            "allow": True,
+        })
+        assert r.status_code == 200
+        assert r.json() == {"ok": True}
+
+        wait_until_idle(client, h, cid)
+        with client.stream("GET", f"/api/chats/{cid}/stream?start=0", headers=h) as stream_resp:
+            events = [json.loads(line) for line in stream_resp.iter_lines() if line and '"ping"' not in line]
+        assert any(e.get("type") == "approval_result" and e.get("allow") is True and e.get("by") == "notification" for e in events)
+
+
+def test_push_action_token_is_single_use(env, monkeypatch):
+    captured_payloads = []
+    def mock_send_all(subs, payload, data_dir, contact):
+        captured_payloads.append(payload)
+        return len(subs.all())
+    monkeypatch.setattr(push, "send_all", mock_send_all)
+
+    client, h = env(push_show_commands=True)
+    with client:
+        _setup_push_sub(client, h)
+        cid = new_chat(client, h, mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+
+        end = time.time() + 5
+        while time.time() < end and not any("approval" in p for p in captured_payloads):
+            time.sleep(0.05)
+        payload = next(p for p in captured_payloads if "approval" in p)
+        appr = payload["approval"]
+
+        r1 = client.post("/push-action", json={
+            "chat": cid,
+            "req": appr["req"],
+            "token": appr["token"],
+            "allow": True,
+        })
+        assert r1.status_code == 200
+
+        # Second POST with the exact same payload returns 409
+        r2 = client.post("/push-action", json={
+            "chat": cid,
+            "req": appr["req"],
+            "token": appr["token"],
+            "allow": True,
+        })
+        assert r2.status_code == 409
+        assert r2.json() == {"ok": False, "reason": "already_decided"}
+
+
+def test_push_action_wrong_token_unknown_chat_and_unknown_request_look_the_same(env, monkeypatch):
+    captured_payloads = []
+    def mock_send_all(subs, payload, data_dir, contact):
+        captured_payloads.append(payload)
+        return len(subs.all())
+    monkeypatch.setattr(push, "send_all", mock_send_all)
+
+    client, h = env()
+    with client:
+        _setup_push_sub(client, h)
+        cid = new_chat(client, h, mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+
+        end = time.time() + 5
+        while time.time() < end and not any("approval" in p for p in captured_payloads):
+            time.sleep(0.05)
+        payload = next(p for p in captured_payloads if "approval" in p)
+        appr = payload["approval"]
+
+        r_wrong_tok = client.post("/push-action", json={"chat": cid, "req": appr["req"], "token": "wrong-token-abc", "allow": True})
+        r_unk_chat = client.post("/push-action", json={"chat": "0" * 32, "req": appr["req"], "token": appr["token"], "allow": True})
+        r_unk_req = client.post("/push-action", json={"chat": cid, "req": "req-unknown", "token": appr["token"], "allow": True})
+
+        assert r_wrong_tok.status_code == 404
+        assert r_unk_chat.status_code == 404
+        assert r_unk_req.status_code == 404
+
+        assert r_wrong_tok.json() == {"ok": False}
+        assert r_unk_chat.json() == {"ok": False}
+        assert r_unk_req.json() == {"ok": False}
+
+
+def test_push_action_token_dies_when_decided_in_app(env, monkeypatch):
+    captured_payloads = []
+    def mock_send_all(subs, payload, data_dir, contact):
+        captured_payloads.append(payload)
+        return len(subs.all())
+    monkeypatch.setattr(push, "send_all", mock_send_all)
+
+    client, h = env()
+    with client:
+        _setup_push_sub(client, h)
+        cid = new_chat(client, h, mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+
+        end = time.time() + 5
+        while time.time() < end and not any("approval" in p for p in captured_payloads):
+            time.sleep(0.05)
+        payload = next(p for p in captured_payloads if "approval" in p)
+        appr = payload["approval"]
+
+        # Decide in app via regular API
+        r_app = client.post(f"/api/chats/{cid}/approvals/{appr['req']}", headers=h, json={"allow": True})
+        assert r_app.status_code == 200
+
+        # POST to /push-action must be rejected (409 or 404, never 200)
+        r_push = client.post("/push-action", json={
+            "chat": cid,
+            "req": appr["req"],
+            "token": appr["token"],
+            "allow": True,
+        })
+        assert r_push.status_code in (404, 409)
+        assert r_push.status_code != 200
+
+
+def test_push_action_after_timeout_is_rejected(env, monkeypatch):
+    captured_payloads = []
+    def mock_send_all(subs, payload, data_dir, contact):
+        captured_payloads.append(payload)
+        return len(subs.all())
+    monkeypatch.setattr(push, "send_all", mock_send_all)
+    monkeypatch.setenv("AG_APPROVAL_TIMEOUT", "1")
+
+    client, h = env()
+    with client:
+        _setup_push_sub(client, h)
+        cid = new_chat(client, h, mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+
+        end = time.time() + 5
+        while time.time() < end and not any("approval" in p for p in captured_payloads):
+            time.sleep(0.05)
+        payload = next(p for p in captured_payloads if "approval" in p)
+        appr = payload["approval"]
+
+        # Wait until timeout expires and run becomes idle
+        wait_until_idle(client, h, cid, timeout=10)
+
+        # POST to /push-action must fail
+        r = client.post("/push-action", json={
+            "chat": cid,
+            "req": appr["req"],
+            "token": appr["token"],
+            "allow": True,
+        })
+        assert r.status_code in (404, 409)
+        assert r.status_code != 200
+
+
+def test_command_is_only_in_the_payload_when_opted_in(env, monkeypatch):
+    captured_payloads = []
+    def mock_send_all(subs, payload, data_dir, contact):
+        captured_payloads.append(payload)
+        return len(subs.all())
+    monkeypatch.setattr(push, "send_all", mock_send_all)
+
+    # Opted out by default
+    client1, h1 = env(push_show_commands=False)
+    with client1:
+        _setup_push_sub(client1, h1)
+        cid1 = new_chat(client1, h1, mode="ask")
+        client1.post(f"/api/chats/{cid1}/messages", headers=h1, json={"text": "NEEDS_APPROVAL"})
+
+        end = time.time() + 5
+        while time.time() < end and not captured_payloads:
+            time.sleep(0.05)
+        p1 = captured_payloads[-1]
+        assert p1["body"] == "Open to see what it wants to do"
+        assert p1["approval"]["can_allow"] is False
+
+    captured_payloads.clear()
+
+    # Opted in
+    client2, h2 = env(push_show_commands=True)
+    with client2:
+        _setup_push_sub(client2, h2)
+        cid2 = new_chat(client2, h2, mode="ask")
+        client2.post(f"/api/chats/{cid2}/messages", headers=h2, json={"text": "NEEDS_APPROVAL"})
+
+        end = time.time() + 5
+        while time.time() < end and not captured_payloads:
+            time.sleep(0.05)
+        p2 = captured_payloads[-1]
+        assert "echo hi" in p2["body"]
+        assert p2["approval"]["can_allow"] is True
+
+
+def test_push_action_rejects_bodies_over_1kb(env):
+    client, h = env()
+    with client:
+        big_body = json.dumps({
+            "chat": "0" * 32,
+            "req": "req-1",
+            "token": "x" * 1100,
+            "allow": True,
+        })
+        r = client.post("/push-action", content=big_body, headers={"Content-Type": "application/json"})
+        assert r.status_code in (413, 400)
+
+
+def test_token_is_never_logged(env, monkeypatch, caplog, capsys):
+    import logging
+    caplog.set_level(logging.DEBUG)
+
+    captured_payloads = []
+    def mock_send_all(subs, payload, data_dir, contact):
+        captured_payloads.append(payload)
+        return len(subs.all())
+    monkeypatch.setattr(push, "send_all", mock_send_all)
+
+    client, h = env(push_show_commands=True)
+    with client:
+        _setup_push_sub(client, h)
+        cid = new_chat(client, h, mode="ask")
+        client.post(f"/api/chats/{cid}/messages", headers=h, json={"text": "NEEDS_APPROVAL"})
+
+        end = time.time() + 5
+        while time.time() < end and not any("approval" in p for p in captured_payloads):
+            time.sleep(0.05)
+        payload = next(p for p in captured_payloads if "approval" in p)
+        plain_token = payload["approval"]["token"]
+
+        r = client.post("/push-action", json={
+            "chat": cid,
+            "req": payload["approval"]["req"],
+            "token": plain_token,
+            "allow": True,
+        })
+        assert r.status_code == 200
+
+    out, err = capsys.readouterr()
+    assert plain_token not in out
+    assert plain_token not in err
+    for record in caplog.records:
+        assert plain_token not in record.getMessage()
+
