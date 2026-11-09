@@ -368,6 +368,26 @@ dialog.sheet::backdrop { background: var(--scrim); animation: fade-in 200ms var(
 .sched-meta { font-size: .8125rem; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .note { color: var(--text-3); font-size: .9375rem; margin: 6px 0; }
 
+/* compare view */
+.tabs-bar { display: flex; border-bottom: 1px solid var(--line); background: var(--surface); padding: 4px 8px; gap: 8px; }
+.tab-btn { flex: 1; height: 44px; border: 0; background: var(--surface-2); border-radius: var(--r-s); font-weight: 600; font-size: .875rem; color: var(--text-2); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.tab-btn.active { background: var(--surface); color: var(--text); border: 1px solid var(--line); }
+.tab-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--ok); }
+
+.compare { display: grid; grid-template-columns: 1fr; flex: 1; min-height: 0; }
+.compare .col { display: flex; flex-direction: column; min-height: 0; height: 100%; position: relative; }
+.compare .col-head { padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.compare .col-head h3 { margin: 0; font-size: .875rem; font-weight: 650; color: var(--text-2); }
+.compare .msgs { flex: 1; min-height: 0; }
+
+@media (min-width: 1000px) {
+  .tabs-bar { display: none; }
+  .compare { grid-template-columns: 1fr 1fr; }
+  .compare .col { border-right: 1px solid var(--line); }
+  .compare .col:last-child { border-right: 0; }
+  .compare .col[hidden] { display: flex !important; }
+}
+
 /* overflow menu */
 .menu { position: absolute; right: 8px; top: calc(100% + 4px); z-index: 30; min-width: 14rem; padding: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-m); box-shadow: var(--shadow); animation: sheet-in 160ms var(--ease); transform-origin: top right; }
 .menu button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; text-align: left; transition: background-color var(--t-fast) var(--ease); }

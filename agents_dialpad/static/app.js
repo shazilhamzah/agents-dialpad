@@ -2,6 +2,7 @@
 
 /* ===================== helpers ===================== */
 const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const app = $('#app');
 const esc = Markdown.escapeHtml;
 const LS = {
@@ -87,13 +88,14 @@ async function uploadFile(chatId, file) {
   }
   return r.json();
 }
+const postJSON = async (p, b) => (await api(p, { method: 'POST', body: JSON.stringify(b) })).json();
 function forgetToken() { LS.del('ag_token'); token = null; }
 
 /* ===================== state ===================== */
 const state = { chats: [], sig: '', info: null, drafts: {}, openTools: new Set(), query: '', quick: {} };
-let cur = null;           // open conversation: { chat, live: {events}|null, ctrl, gen }
-let stick = true;         // keep the view pinned to the newest text unless the reader scrolled up
-let renderQueued = false;
+let cur = null;           // the open single-chat view (see createChatView)
+let curGroup = null;      // open compare group ID if in compare view
+let activeViews = [];     // all active chat views (1 for single chat, 2 for compare)
 
 /* ===================== sheets, menu, confirm ===================== */
 function openSheet(html, label) {
@@ -447,22 +449,47 @@ function renderList() {
     return;
   }
   const activeId = cur && cur.chat.id;
-  const pinned = state.chats.filter((c) => c.pinned);
-  const recent = state.chats.filter((c) => !c.pinned);
-  const rowHTML = (c) => `
+  const activeGid = curGroup;
+  const seenGroups = new Set();
+  const chatRow = (c) => `
     <a class="chat-row" href="#/c/${c.id}"${c.id === activeId ? ' aria-current="page"' : ''}>
       <span class="t"><span class="title">${esc(c.title)}</span>
       <span class="meta">${esc(providerLabel(c.provider))} · ${esc(c.project)} · ${esc(timeAgo(c.updated))}</span></span>
       ${c.pinned ? `<span class="pin-badge" aria-hidden="true">${icon('pin')}</span>` : ''}
       ${c.running ? '<span class="dot" role="img" aria-label="Running"></span>' : ''}
     </a>`;
+  const groupRow = (c) => {
+    const groupChats = state.chats.filter((x) => x.group === c.group);
+    const isRunning = groupChats.some((x) => x.running);
+    const maxUpdated = Math.max(...groupChats.map((x) => x.updated || 0));
+    const title = c.title === 'New chat' ? 'New chat' : c.title.replace(/^Compare:\s*/, '');
+    return `
+      <a class="chat-row" href="#/g/${esc(c.group)}"${activeGid === c.group ? ' aria-current="page"' : ''}>
+        <span class="t"><span class="title">Compare: ${esc(title)}</span>
+        <span class="meta">${esc(c.project)} · ${esc(timeAgo(maxUpdated))}</span></span>
+        ${isRunning ? '<span class="dot" role="img" aria-label="Running"></span>' : ''}
+      </a>`;
+  };
 
+  // One row per chat, one row per compare group; pinned single chats first.
+  const items = [];
+  for (const c of state.chats) {
+    if (c.group) {
+      if (seenGroups.has(c.group)) continue;
+      seenGroups.add(c.group);
+      items.push({ pinned: false, html: groupRow(c) });
+    } else {
+      items.push({ pinned: !!c.pinned, html: chatRow(c) });
+    }
+  }
+  const pinned = items.filter((i) => i.pinned);
+  const recent = items.filter((i) => !i.pinned);
   let html = '';
   if (pinned.length) {
-    html += '<div class="chat-sec-label">Pinned</div>' + pinned.map(rowHTML).join('');
-    if (recent.length) html += '<div class="chat-sec-label">Recent</div>' + recent.map(rowHTML).join('');
+    html += '<div class="chat-sec-label">Pinned</div>' + pinned.map((i) => i.html).join('');
+    if (recent.length) html += '<div class="chat-sec-label">Recent</div>' + recent.map((i) => i.html).join('');
   } else {
-    html = recent.map(rowHTML).join('');
+    html = recent.map((i) => i.html).join('');
   }
   list.innerHTML = html;
 }
@@ -509,13 +536,18 @@ const modelOptions = (p, selected) => (p ? p.models : []).map((m) =>
 /* ===================== sheets: new chat, model, limits ===================== */
 async function openNewChat() {
   let info; try { info = await loadInfo(); } catch (e) { return handleErr(e); }
-  const first = info.providers.find((p) => p.available);
+  const avail = info.providers.filter((p) => p.available);
+  const first = avail[0] || info.providers[0];
   const isClaude = (first && first.name === 'claude');
   const firstModes = (first && first.modes) ? first.modes : info.modes;
+  let provOptions = info.providers.map((p) => `<option value="${esc(p.name)}"${p.available ? '' : ' disabled'}>${esc(p.label)}${p.available ? '' : ' (not yet)'}</option>`).join('');
+  if (avail.length >= 2) {
+    provOptions += `<option value="__both__">Both (compare)</option>`;
+  }
   const dlg = openSheet(`<form id="f-new"><h2>New chat</h2>
     <label for="n-prov">Agent</label>
-    <select id="n-prov">${info.providers.map((p) => `<option value="${esc(p.name)}"${p.available ? '' : ' disabled'}>${esc(p.label)}${p.available ? '' : ' (not yet)'}</option>`).join('')}</select>
-    <label for="n-model">Model</label>
+    <select id="n-prov">${provOptions}</select>
+    <label for="n-model" id="lbl-model">Model</label>
     <select id="n-model">${modelOptions(first, '')}</select>
     <label for="n-proj">Project folder</label>
     <select id="n-proj">${info.projects.map((p) => `<option>${esc(p)}</option>`).join('')}</select>
@@ -525,12 +557,18 @@ async function openNewChat() {
     <button class="btn secondary" type="button" id="btn-continue-desk" style="width: 100%; margin-top: 12px;" ${isClaude ? '' : 'hidden'}>Continue a desktop session</button>
   </form>`, 'New chat');
   $('[data-close]', dlg).onclick = () => dlg.close();
+  // Permission levels every available agent supports (used for "Both (compare)").
+  const sharedModes = () => info.modes.filter((m) => avail.every((p) => !p.modes || p.modes.some((x) => x.id === m.id)));
   $('#n-prov', dlg).onchange = () => {
-    const prov = info.providers.find((p) => p.name === $('#n-prov', dlg).value);
-    $('#n-model', dlg).innerHTML = modelOptions(prov, '');
-    const pModes = (prov && prov.modes) ? prov.modes : info.modes;
+    const val = $('#n-prov', dlg).value;
+    const isBoth = val === '__both__';
+    const prov = info.providers.find((p) => p.name === val);
+    $('#lbl-model', dlg).hidden = isBoth;
+    $('#n-model', dlg).hidden = isBoth;
+    if (!isBoth) $('#n-model', dlg).innerHTML = modelOptions(prov, '');
+    const pModes = isBoth ? sharedModes() : ((prov && prov.modes) ? prov.modes : info.modes);
     $('#n-mode', dlg).innerHTML = pModes.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
-    $('#btn-continue-desk', dlg).hidden = $('#n-prov', dlg).value !== 'claude';
+    $('#btn-continue-desk', dlg).hidden = val !== 'claude';
   };
   $('#btn-continue-desk', dlg).onclick = () => {
     const proj = $('#n-proj', dlg).value;
@@ -541,10 +579,35 @@ async function openNewChat() {
   $('#f-new', dlg).onsubmit = async (e) => {
     e.preventDefault();
     const go = $('#n-go', dlg); go.setAttribute('aria-busy', 'true');
+    const prov = $('#n-prov', dlg).value;
+    const project = $('#n-proj', dlg).value;
+    const mode = $('#n-mode', dlg).value;
     try {
-      const chat = await getJSON('/chats', { method: 'POST', body: JSON.stringify({
-        provider: $('#n-prov', dlg).value, model: $('#n-model', dlg).value, project: $('#n-proj', dlg).value, mode: $('#n-mode', dlg).value }) });
-      dlg.close(); location.hash = '#/c/' + chat.id; refreshList();
+      if (prov === '__both__') {
+        const bytes = new Uint8Array(4);
+        crypto.getRandomValues(bytes);
+        const gid = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+        await Promise.all(avail.map((p) => postJSON('/chats', {
+          provider: p.name,
+          project,
+          mode,
+          model: '',
+          group: gid,
+        })));
+        dlg.close();
+        location.hash = '#/g/' + gid;
+        refreshList();
+      } else {
+        const chat = await postJSON('/chats', {
+          provider: prov,
+          model: $('#n-model', dlg).value,
+          project,
+          mode,
+        });
+        dlg.close();
+        location.hash = '#/c/' + chat.id;
+        refreshList();
+      }
     } catch (err) { go.removeAttribute('aria-busy'); handleErr(err); }
   };
 }
@@ -776,19 +839,181 @@ function showEmptyPane() {
   pane.innerHTML = `<div class="empty">${icon('chat')}<p><b>Pick a chat</b></p><p>Choose one from the list, or start a new one.</p>
     <button class="btn" id="pane-new" type="button">New chat</button></div>`;
   $('#pane-new').onclick = openNewChat;
-  setRunning(false);
+  const shell = $('.shell'); if (shell) shell.dataset.running = 'false';
 }
 
 function teardownChat() {
   closeMenu();
-  if (!cur) return;
-  const input = $('#input'); if (input) state.drafts[cur.chat.id] = input.value;
-  if (cur.ctrl) cur.ctrl.abort();
+  const input = $('#input');
+  if (input) {
+    if (cur && cur.chat) state.drafts[cur.chat.id] = input.value;
+    else if (curGroup) state.drafts['group_' + curGroup] = input.value;
+  }
+  activeViews.forEach((v) => v.destroy());
+  activeViews = [];
   cur = null;
+  curGroup = null;
+}
+
+function createChatView(chat, els) {
+  const view = {
+    chat,
+    live: null,
+    ctrl: null,
+    gen: 0,
+    stick: true,
+    els,
+    onRunningChange: null,
+    _renderQueued: false,
+
+    renderThread() {
+      if (!this.els.thread) return;
+      this.els.thread.dataset.chatId = this.chat.id;       // lets approval buttons find their chat (also in compare view)
+      let topNote = '';
+      if (this.chat.imported && (!this.chat.messages || this.chat.messages.length === 0)) {
+        topNote = '<div class="thread-note">Continued from a session on the computer. Earlier messages stay there, but the agent remembers them.</div>';
+      }
+      this.els.thread.innerHTML = topNote + this.chat.messages.map(msgHTML).join('') + '<div class="live-slot"></div>';
+      this.renderLive();
+    },
+
+    renderLive() {
+      if (!this.els.thread) return;
+      const el = this.els.thread.querySelector('.live-slot');
+      if (!el) return;
+      if (!this.live) { el.className = 'live-slot'; el.innerHTML = ''; return; }
+      el.className = 'live-slot msg assistant';
+      el.innerHTML = `<div class="prose">${assistantHTML(this.live.events, true)}</div>`;
+    },
+
+    scheduleRender() {
+      if (this._renderQueued) return;
+      this._renderQueued = true;
+      requestAnimationFrame(() => {
+        this._renderQueued = false;
+        this.renderLive();
+        this.scrollToEnd(false);
+      });
+    },
+
+    scrollToEnd(force) {
+      const box = this.els.msgs;
+      if (!box) return;
+      if (force || this.stick) {
+        box.scrollTop = box.scrollHeight;
+        if (force) this.stick = true;
+      }
+      if (this.els.jump) this.els.jump.hidden = this.stick || !this.live;
+    },
+
+    setRunning(on) {
+      if (this.els.send && activeViews.length <= 1) {
+        this.els.send.classList.toggle('stop', on);
+        this.els.send.setAttribute('aria-label', on ? 'Stop' : 'Send');
+        this.els.send.innerHTML = icon(on ? 'stop' : 'up');
+      }
+      const shell = $('.shell');
+      if (shell && activeViews.length <= 1) shell.dataset.running = on ? 'true' : 'false';
+      if (this.els.msgs) this.els.msgs.setAttribute('aria-busy', on ? 'true' : 'false');
+      if (this.onRunningChange) this.onRunningChange(on);
+    },
+
+    async attach() {
+      if (this.ctrl) this.ctrl.abort();
+      const gen = ++this.gen, ctrl = new AbortController();
+      this.ctrl = ctrl;
+      this.live = { events: [] };
+      this.setRunning(true);
+      this.renderLive();
+      this.scrollToEnd(true);
+      try {
+        const r = await api(`/chats/${this.chat.id}/stream?start=0`, { signal: ctrl.signal });
+        const reader = r.body.getReader(), dec = new TextDecoder();
+        let buf = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let nl;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line) continue;
+            const ev = JSON.parse(line);
+            if (ev.type === 'ping') continue;
+            this.live.events.push(ev);
+            this.scheduleRender();
+          }
+        }
+      } catch (e) {
+        if (gen !== this.gen || e.name === 'AbortError') return;
+        if (e instanceof AuthError) return handleErr(e);
+        setTimeout(() => { if (gen === this.gen) this.recover(); }, 1500);
+        return;
+      }
+      if (gen !== this.gen) return;
+      try {
+        this.chat = await getJSON('/chats/' + this.chat.id);
+      } catch {}
+      this.live = null;
+      this.setRunning(false);
+      if (this === cur) updateHeader();
+      this.renderThread();
+      this.scrollToEnd(false);
+      if (this.els.sr) this.els.sr.textContent = 'Reply finished';
+      refreshList();
+    },
+
+    async recover() {
+      try {
+        const fresh = await getJSON('/chats/' + this.chat.id);
+        this.chat = fresh;
+        if (fresh.running) {
+          this.attach();
+        } else {
+          this.live = null;
+          this.setRunning(false);
+          if (this === cur) updateHeader();
+          this.renderThread();
+          this.scrollToEnd(false);
+        }
+      } catch (e) {
+        if (e instanceof AuthError) handleErr(e);
+        else setTimeout(() => this.recover(), 3000);
+      }
+    },
+
+    async stop() {
+      try {
+        await api(`/chats/${this.chat.id}/stop`, { method: 'POST' });
+      } catch (e) {
+        toast(e.message);
+      }
+    },
+
+    destroy() {
+      if (this.ctrl) {
+        this.ctrl.abort();
+        this.ctrl = null;
+      }
+    }
+  };
+
+  if (els.msgs) {
+    els.msgs.addEventListener('scroll', () => {
+      view.stick = els.msgs.scrollHeight - els.msgs.scrollTop - els.msgs.clientHeight < 80;
+      if (els.jump) els.jump.hidden = view.stick || !view.live;
+    }, { passive: true });
+  }
+  if (els.jump) {
+    els.jump.onclick = () => view.scrollToEnd(true);
+  }
+
+  return view;
 }
 
 async function openChat(id) {
-  if (cur && cur.chat.id === id && $('#thread')) return;           // already showing it
+  if (cur && cur.chat.id === id && $('#thread')) return;
   teardownChat();
   let chat;
   try { chat = await getJSON('/chats/' + id); } catch (e) { location.hash = '#/'; return handleErr(e); }
@@ -797,16 +1022,19 @@ async function openChat(id) {
     try { state.quick[chat.project] = await getJSON('/projects/' + encodeURIComponent(chat.project) + '/commands'); }
     catch { state.quick[chat.project] = []; }
   }
-  cur = { chat, live: null, ctrl: null, gen: 0, pending: [], uploading: 0 };
+  buildPane(chat);
+  cur = createChatView(chat, { msgs: $('#msgs'), thread: $('#thread'), jump: $('#jump'), send: $('#send'), sr: $('#sr') });
+  cur.pending = [];       // attachments waiting to be sent (single-chat view only)
+  cur.uploading = 0;
+  activeViews = [cur];
   state.openTools = new Set();
-  buildPane();
-  renderThread(); scrollToEnd(true);
-  renderList();                                                     // highlight the open chat
-  if (chat.running) attach();
+  cur.renderThread();
+  cur.scrollToEnd(true);
+  renderList();
+  if (chat.running) cur.attach();
 }
 
-function buildPane() {
-  const chat = cur.chat;
+function buildPane(chat) {
   $('#pane').innerHTML = `
     <header class="bar">
       <a class="icon-btn back" href="#/" aria-label="Back to chats">${icon('back')}</a>
@@ -829,18 +1057,7 @@ function buildPane() {
         <button class="send" id="send" type="submit" aria-label="Send">${icon('up')}</button>
       </div>
     </div></form>`;
-  updateHeader();
-
-  const msgs = $('#msgs'), input = $('#input');
-  msgs.addEventListener('scroll', () => {
-    stick = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80;
-    $('#jump').hidden = stick || !cur || !cur.live;
-  }, { passive: true });
-  $('#jump').onclick = () => scrollToEnd(true);
-  msgs.addEventListener('toggle', (e) => {                          // remember which tool calls the reader opened
-    const d = e.target; if (!d.matches || !d.matches('details.tool')) return;
-    if (d.open) state.openTools.add(d.dataset.id); else state.openTools.delete(d.dataset.id);
-  }, true);
+  updateHeader(chat);
 
   function updateSendBtn() {
     const btn = $('#send');
@@ -923,6 +1140,7 @@ function buildPane() {
     }
   };
 
+  const input = $('#input');
   $('#btn-model').onclick = openModelPicker;
   $('#btn-more').onclick = (e) => {
     if ($('#menu')) return closeMenu();
@@ -947,24 +1165,24 @@ function buildPane() {
   };
 
   input.value = state.drafts[chat.id] || '';
-  $('.field').addEventListener('click', (e) => { if (e.target === e.currentTarget) input.focus(); });   // the whole pill is tappable
+  $('.field').addEventListener('click', (e) => { if (e.target === e.currentTarget) input.focus(); });
   input.addEventListener('input', autosize);
   input.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing) return;
-    // Phones: Enter is a new line (use the Send button). Computers: Enter sends, Shift+Enter is a new line.
     const send = e.ctrlKey || e.metaKey || (!e.shiftKey && matchMedia('(pointer: fine)').matches);
-    if (send) { e.preventDefault(); if (cur && !cur.live) sendMessage(); }
+    if (send) { e.preventDefault(); if (cur && !cur.live) sendMessage(cur); }
   });
-  $('#composer').onsubmit = (e) => { e.preventDefault(); if (cur && cur.live) stopRun(); else sendMessage(); };
+  $('#composer').onsubmit = (e) => { e.preventDefault(); if (cur && cur.live) cur.stop(); else sendMessage(cur); };
   autosize();
 }
 
-function updateHeader() {
-  if (!cur || !$('#title')) return;
-  const c = cur.chat;
+function updateHeader(chat) {
+  const c = chat || (cur && cur.chat);
+  if (!c || !$('#title')) return;
   $('#title').textContent = c.title;
   $('#sub').textContent = `${providerLabel(c.provider)} · ${c.project} · ${MODE_TEXT[c.mode] || c.mode}`;
-  $('#model-label').textContent = modelLabel(c.provider, c.model || '');
+  const ml = $('#model-label');
+  if (ml) ml.textContent = modelLabel(c.provider, c.model || '');
 }
 
 function autosize() { const t = $('#input'); if (!t) return; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, window.innerHeight * 0.38) + 'px'; }
@@ -1266,6 +1484,149 @@ async function deleteChat() {
   delete state.drafts[id]; location.hash = '#/'; refreshList();
 }
 
+/* ===================== compare view ===================== */
+async function openGroup(gid) {
+  if (curGroup === gid && $('#col-0')) return;
+  teardownChat();
+  let data;
+  try { data = await getJSON('/groups/' + gid); } catch (e) { location.hash = '#/'; return handleErr(e); }
+  if (location.hash !== '#/g/' + gid) return;
+  curGroup = gid;
+  const chats = data.chats;
+  if (!chats || chats.length < 2) { location.hash = '#/'; return; }
+
+  buildGroupPane(chats, gid);
+
+  const view0 = createChatView(chats[0], { msgs: $('#msgs-0'), thread: $('#thread-0'), jump: $('#jump-0'), send: $('#send'), sr: $('#sr') });
+  const view1 = createChatView(chats[1], { msgs: $('#msgs-1'), thread: $('#thread-1'), jump: $('#jump-1'), send: $('#send'), sr: $('#sr') });
+  activeViews = [view0, view1];
+  state.openTools = new Set();
+
+  const updateGroupRunning = () => {
+    const isRunning = activeViews.some((v) => v.live || (v.chat && v.chat.running));
+    const shell = $('.shell'); if (shell) shell.dataset.running = isRunning ? 'true' : 'false';
+    const b = $('#send');
+    if (b) {
+      b.classList.toggle('stop', isRunning);
+      b.setAttribute('aria-label', isRunning ? 'Stop' : 'Send');
+      b.innerHTML = icon(isRunning ? 'stop' : 'up');
+    }
+    const d0 = $('#dot-0'), d1 = $('#dot-1');
+    if (d0) d0.hidden = !(view0.live || (view0.chat && view0.chat.running));
+    if (d1) d1.hidden = !(view1.live || (view1.chat && view1.chat.running));
+  };
+
+  view0.onRunningChange = updateGroupRunning;
+  view1.onRunningChange = updateGroupRunning;
+
+  view0.renderThread(); view0.scrollToEnd(true);
+  view1.renderThread(); view1.scrollToEnd(true);
+  updateGroupRunning();
+  renderList();
+
+  if (chats[0].running) view0.attach();
+  if (chats[1].running) view1.attach();
+}
+
+function buildGroupPane(chats, gid) {
+  const c0 = chats[0], c1 = chats[1];
+  $('#pane').innerHTML = `
+    <header class="bar">
+      <a class="icon-btn back" href="#/" aria-label="Back to chats">${icon('back')}</a>
+      <div class="titles"><h2>Compare</h2><span class="sub">${esc(c0.project)} · ${esc(MODE_TEXT[c0.mode] || c0.mode)}</span></div>
+      <button class="icon-btn" id="btn-more" type="button" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">${icon('more')}</button>
+    </header>
+    <div class="tabs-bar" role="tablist">
+      <button class="tab-btn active" role="tab" id="tab-btn-0" type="button">${esc(providerLabel(c0.provider))} <span class="tab-dot" id="dot-0" hidden></span></button>
+      <button class="tab-btn" role="tab" id="tab-btn-1" type="button">${esc(providerLabel(c1.provider))} <span class="tab-dot" id="dot-1" hidden></span></button>
+    </div>
+    <div class="compare">
+      <div class="col" id="col-0">
+        <div class="col-head"><h3>${esc(providerLabel(c0.provider))}</h3></div>
+        <div class="msgs" id="msgs-0" role="log" aria-label="${esc(providerLabel(c0.provider))} conversation">
+          <div class="thread" id="thread-0"></div>
+          <button class="icon-btn jump" id="jump-0" type="button" aria-label="Scroll to latest message" hidden>${icon('down')}</button>
+        </div>
+      </div>
+      <div class="col" id="col-1" hidden>
+        <div class="col-head"><h3>${esc(providerLabel(c1.provider))}</h3></div>
+        <div class="msgs" id="msgs-1" role="log" aria-label="${esc(providerLabel(c1.provider))} conversation">
+          <div class="thread" id="thread-1"></div>
+          <button class="icon-btn jump" id="jump-1" type="button" aria-label="Scroll to latest message" hidden>${icon('down')}</button>
+        </div>
+      </div>
+    </div>
+    <div class="sr" id="sr" role="status"></div>
+    <form class="composer" id="composer" autocomplete="off"><div class="composer-in">
+      <div class="row">
+        <div class="field"><label class="sr" for="input">Message</label>
+          <textarea id="input" rows="1" placeholder="Message both agents" enterkeyhint="send"></textarea></div>
+        <button class="send" id="send" type="submit" aria-label="Send">${icon('up')}</button>
+      </div>
+    </div></form>`;
+
+  const selectTab = (idx) => {
+    $('#tab-btn-0').classList.toggle('active', idx === 0);
+    $('#tab-btn-1').classList.toggle('active', idx === 1);
+    $('#col-0').hidden = (idx !== 0);
+    $('#col-1').hidden = (idx !== 1);
+    if (activeViews[idx]) activeViews[idx].scrollToEnd(false);
+  };
+  $('#tab-btn-0').onclick = () => selectTab(0);
+  $('#tab-btn-1').onclick = () => selectTab(1);
+
+  $('#btn-more').onclick = (e) => {
+    if ($('#menu')) return closeMenu();
+    const items = [
+      { icon: 'gauge', label: 'Usage limits', run: openLimits },
+    ];
+    if (state.info && state.info.has_schedules) {
+      items.push({ icon: 'clock', label: 'Schedules', run: openSchedules });
+    }
+    items.push({ icon: 'trash', label: 'Delete both', danger: true, run: () => deleteGroup(gid) });
+    openMenu(e.currentTarget, items);
+  };
+
+  const input = $('#input');
+  input.value = state.drafts['group_' + gid] || '';
+  $('.field').addEventListener('click', (e) => { if (e.target === e.currentTarget) input.focus(); });
+  input.addEventListener('input', autosize);
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    const send = e.ctrlKey || e.metaKey || (!e.shiftKey && matchMedia('(pointer: fine)').matches);
+    if (send) {
+      e.preventDefault();
+      const running = activeViews.some((v) => v.live || (v.chat && v.chat.running));
+      if (!running) sendMessage(activeViews);
+    }
+  });
+  $('#composer').onsubmit = (e) => {
+    e.preventDefault();
+    const running = activeViews.some((v) => v.live || (v.chat && v.chat.running));
+    if (running) activeViews.forEach((v) => v.stop());
+    else sendMessage(activeViews);
+  };
+  autosize();
+}
+
+async function deleteGroup(gid) {
+  const ok = await confirmSheet({
+    title: 'Delete both chats?',
+    body: 'Both conversations in this comparison are removed from this computer. This can’t be undone.',
+    confirm: 'Delete both',
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    await api('/groups/' + gid, { method: 'DELETE' });
+    delete state.drafts['group_' + gid];
+    location.hash = '#/';
+    refreshList();
+  } catch (e) {
+    handleErr(e);
+  }
+}
+
 /* ---- rendering ---- */
 function toolArg(input) {
   input = input || {};
@@ -1358,115 +1719,59 @@ function msgHTML(m) {
   }
   return `<div class="msg assistant"><div class="prose">${assistantHTML(m.events || [], false)}</div></div>`;
 }
-function renderThread() {
-  const t = $('#thread'); if (!t || !cur) return;
-  let topNote = '';
-  if (cur.chat.imported && (!cur.chat.messages || cur.chat.messages.length === 0)) {
-    topNote = '<div class="thread-note">Continued from a session on the computer. Earlier messages stay there, but the agent remembers them.</div>';
-  }
-  t.innerHTML = topNote + cur.chat.messages.map(msgHTML).join('') + '<div id="live"></div>';
-  renderLive();
-}
-function renderLive() {
-  const el = $('#live'); if (!el || !cur) return;
-  if (!cur.live) { el.className = ''; el.innerHTML = ''; return; }
-  el.className = 'msg assistant';
-  el.innerHTML = `<div class="prose">${assistantHTML(cur.live.events, true)}</div>`;
-}
-function scrollToEnd(force) {
-  const box = $('#msgs'); if (!box) return;
-  if (force || stick) { box.scrollTop = box.scrollHeight; if (force) stick = true; }
-  const j = $('#jump'); if (j) j.hidden = stick || !cur || !cur.live;
-}
-function scheduleRender() {
-  if (renderQueued) return; renderQueued = true;
-  requestAnimationFrame(() => { renderQueued = false; renderLive(); scrollToEnd(false); });
-}
-
-function setRunning(on) {
-  const shell = $('.shell'); if (shell) shell.dataset.running = on ? 'true' : 'false';
-  const b = $('#send'); if (b) {
-    b.classList.toggle('stop', on);
-    b.setAttribute('aria-label', on ? 'Stop' : 'Send');
-    b.innerHTML = icon(on ? 'stop' : 'up');
-  }
-  const log = $('#msgs'); if (log) log.setAttribute('aria-busy', on ? 'true' : 'false');
-}
 
 /* ---- sending + streaming ---- */
-async function sendMessage() {
-  if (!cur || cur.live || (cur.uploading && cur.uploading > 0)) return;
+async function sendMessage(views) {
+  if (!views) views = activeViews;
+  if (!Array.isArray(views)) views = [views];
+  views = views.filter((v) => v && !v.live);
+  if (!views.length) return;
+  if (views.some((v) => v.uploading > 0)) return;            // wait for attachments to finish uploading
   const input = $('#input');
   let text = input.value.trim();
-  const attachments = (cur.pending || []).filter((p) => !p.loading && p.name).map((p) => p.name);
+  // Attachments only exist in the single-chat view (the compare view has no paperclip).
+  const single = views.length === 1 ? views[0] : null;
+  const pending = (single && single.pending) || [];
+  const attachments = pending.filter((p) => !p.loading && p.name).map((p) => p.name);
+  const labels = pending.filter((p) => !p.loading && p.name).map((p) => p.label || p.name);
   if (!text && !attachments.length) return;
-  if (!text && attachments.length) text = 'See the attached files.';
-
-  (cur.pending || []).forEach((p) => { if (p.url) URL.revokeObjectURL(p.url); });
-  const pendingLabels = (cur.pending || []).map((p) => p.label || p.name);
-  cur.pending = [];
+  if (!text) text = 'See the attached files.';
+  pending.forEach((p) => { if (p.url) URL.revokeObjectURL(p.url); });
+  if (single) single.pending = [];
   const attRow = $('#attachments');
   if (attRow) { attRow.innerHTML = ''; attRow.hidden = true; }
+  input.value = '';
+  views.forEach((v) => {
+    delete state.drafts[v.chat.id];
+    if (v.chat.group) delete state.drafts['group_' + v.chat.group];
+  });
+  autosize();
 
-  input.value = ''; delete state.drafts[cur.chat.id]; autosize();
-  cur.chat.messages.push({ role: 'user', text, attachments: pendingLabels });
-  renderThread(); scrollToEnd(true);
-  try {
-    await api(`/chats/${cur.chat.id}/messages`, { method: 'POST', body: JSON.stringify({ text, attachments }) });
-  } catch (e) {
-    if (e instanceof AuthError) return handleErr(e);
-    toast(e.message); input.value = text; autosize();
-    cur.chat = await getJSON('/chats/' + cur.chat.id); renderThread(); return;
+  for (const v of views) {
+    v.chat.messages.push({ role: 'user', text, attachments: v === single ? labels : [] });
+    v.renderThread();
+    v.scrollToEnd(true);
   }
-  attach();
-}
-async function stopRun() { try { await api(`/chats/${cur.chat.id}/stop`, { method: 'POST' }); } catch (e) { toast(e.message); } }
 
-/* Replays the running turn from event 0, so reconnecting after a locked screen is trivial. */
-async function attach() {
-  const c = cur; if (!c) return;
-  c.ctrl && c.ctrl.abort();
-  const gen = ++c.gen, ctrl = new AbortController(); c.ctrl = ctrl;
-  c.live = { events: [] }; setRunning(true); renderLive(); scrollToEnd(true);
-  try {
-    const r = await api(`/chats/${c.chat.id}/stream?start=0`, { signal: ctrl.signal });
-    const reader = r.body.getReader(), dec = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const { value, done } = await reader.read(); if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let nl;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1); if (!line) continue;
-        const ev = JSON.parse(line);
-        if (ev.type === 'ping') continue;
-        c.live.events.push(ev); scheduleRender();
-      }
+  await Promise.all(views.map(async (v) => {
+    try {
+      const body = v === single && attachments.length ? { text, attachments } : { text };
+      await api(`/chats/${v.chat.id}/messages`, { method: 'POST', body: JSON.stringify(body) });
+      v.attach();
+    } catch (e) {
+      if (e instanceof AuthError) return handleErr(e);
+      toast(e.message);
+      input.value = text;
+      autosize();
+      try { v.chat = await getJSON('/chats/' + v.chat.id); v.renderThread(); } catch {}
     }
-  } catch (e) {
-    if (gen !== c.gen || e.name === 'AbortError') return;
-    if (e instanceof AuthError) return handleErr(e);
-    setTimeout(() => { if (cur === c && gen === c.gen) recover(); }, 1500);   // network blip: retry
-    return;
-  }
-  if (gen !== c.gen || cur !== c) return;
-  c.chat = await getJSON('/chats/' + c.chat.id);
-  c.live = null; setRunning(false); updateHeader(); renderThread(); scrollToEnd(false);
-  const sr = $('#sr'); if (sr) sr.textContent = 'Reply finished';
-  refreshList();
+  }));
 }
-async function recover() {
-  if (!cur) return;
-  try {
-    const fresh = await getJSON('/chats/' + cur.chat.id);
-    cur.chat = fresh;
-    if (fresh.running) attach(); else { cur.live = null; setRunning(false); updateHeader(); renderThread(); scrollToEnd(false); }
-  } catch (e) { if (e instanceof AuthError) handleErr(e); else setTimeout(recover, 3000); }
-}
+
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   refreshList();
-  if (cur && cur.live) recover();
+  activeViews.forEach((v) => { if (v.live || (v.chat && v.chat.running)) v.recover(); });
 });
 
 /* ---- copy buttons on code blocks ---- */
@@ -1483,8 +1788,10 @@ document.addEventListener('click', async (e) => {
   if (!b || b.disabled) return;
   const reqId = b.dataset.approve;
   const allow = b.dataset.allow === '1';
-  if (!cur || !cur.chat) return;
-  const chatId = cur.chat.id;
+  // Find the chat this card belongs to: works in the single view and in either column of the compare view.
+  const host = b.closest('[data-chat-id]');
+  const chatId = host ? host.dataset.chatId : (cur && cur.chat && cur.chat.id);
+  if (!chatId) return;
 
   pendingApprovals.add(reqId);
   const card = b.closest('.approval');
@@ -1503,6 +1810,14 @@ document.addEventListener('click', async (e) => {
   }
 });
 
+/* ---- tool collapse state ---- */
+document.addEventListener('toggle', (e) => {
+  const d = e.target;
+  if (!d.matches || !d.matches('details.tool')) return;
+  if (d.open) state.openTools.add(d.dataset.id);
+  else state.openTools.delete(d.dataset.id);
+}, true);
+
 /* ---- keep the composer above the on-screen keyboard (iOS does not resize the layout viewport) ---- */
 if (window.visualViewport) {
   const vv = window.visualViewport;
@@ -1518,9 +1833,20 @@ async function route() {
   if (!token) return showLogin();
   mountShell();
   const shell = $('.shell');
-  const m = location.hash.match(/^#\/c\/([0-9a-f]{32})$/);
-  if (m) { shell.dataset.view = 'chat'; await openChat(m[1]); }
-  else { shell.dataset.view = 'list'; teardownChat(); showEmptyPane(); renderList(); }
+  const mc = location.hash.match(/^#\/c\/([0-9a-f]{32})$/);
+  const mg = location.hash.match(/^#\/g\/([0-9a-f]{8})$/);
+  if (mc) {
+    shell.dataset.view = 'chat';
+    await openChat(mc[1]);
+  } else if (mg) {
+    shell.dataset.view = 'chat';
+    await openGroup(mg[1]);
+  } else {
+    shell.dataset.view = 'list';
+    teardownChat();
+    showEmptyPane();
+    renderList();
+  }
   refreshList();
 }
 addEventListener('hashchange', route);

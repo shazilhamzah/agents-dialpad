@@ -270,6 +270,14 @@ You can schedule recurring prompts in `config.json`:
 - **Awake requirement:** The host computer must be awake at the scheduled time (or wake within the 2-hour grace window) for the schedule to trigger.
 - **UI:** If schedules are configured, a clock icon appears in the header and More menu with next run times and a **Run now** button.
 
+## Compare agents
+
+When two or more agents are available, choose **Both (compare)** in the New chat sheet. It creates linked chats for both agents in the same project and opens a compare view:
+- On screens under 1000 px, a tab bar lets you switch between agent conversations, showing activity dots while an agent is generating.
+- On screens 1000 px and wider, both agent conversations render side-by-side.
+- A single composer sends the prompt to both agents simultaneously. Both stream and can be stopped together.
+
+
 ## Project layout
 
 - `agents_dialpad/app.py`: HTTP API (`/api/...`, bearer token) and static files; `create_app()` builds an independent app

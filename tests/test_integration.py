@@ -1430,3 +1430,48 @@ def test_run_schedule_now_route(env):
         assert chat["messages"][0]["text"] == "Run now prompt"
 
 
+# --------------------------------------------------------------------------- C5 compare agents
+def test_group_chats_are_linked_and_listed(env):
+    client, h = env()
+    with client:
+        gid = "1234abcd"
+        r1 = client.post("/api/chats", headers=h, json={"provider": "claude", "project": "workspace", "group": gid})
+        r2 = client.post("/api/chats", headers=h, json={"provider": "antigravity", "project": "workspace", "group": gid})
+        assert r1.status_code == 200 and r2.status_code == 200
+        cid1, cid2 = r1.json()["id"], r2.json()["id"]
+
+        # Group endpoint returns both
+        res = client.get(f"/api/groups/{gid}", headers=h)
+        assert res.status_code == 200
+        chats = res.json()["chats"]
+        assert {c["id"] for c in chats} == {cid1, cid2}
+
+        # Chats list includes group field
+        chat_list = client.get("/api/chats", headers=h).json()["chats"]
+        group_chats = [c for c in chat_list if c.get("group") == gid]
+        assert len(group_chats) == 2
+
+        # Deleting group deletes both
+        del_res = client.delete(f"/api/groups/{gid}", headers=h)
+        assert del_res.status_code == 200
+        assert set(del_res.json()["deleted"]) == {cid1, cid2}
+        assert client.get(f"/api/groups/{gid}", headers=h).status_code == 404
+
+
+def test_group_id_is_validated(env):
+    client, h = env()
+    with client:
+        for bad_gid in ["toolong1234", "short", "not_hex!", "1234-567"]:
+            assert client.post("/api/chats", headers=h, json={"provider": "claude", "project": "workspace", "group": bad_gid}).status_code == 400
+            assert client.get(f"/api/groups/{bad_gid}", headers=h).status_code == 400
+            assert client.delete(f"/api/groups/{bad_gid}", headers=h).status_code == 400
+
+
+def test_unknown_group_is_404(env):
+    client, h = env()
+    with client:
+        assert client.get("/api/groups/00000000", headers=h).status_code == 404
+        assert client.delete("/api/groups/00000000", headers=h).status_code == 404
+
+
+

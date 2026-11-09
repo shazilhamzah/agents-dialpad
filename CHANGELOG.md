@@ -17,6 +17,7 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 - **QR code pairing:** `agents-dialpad pair` prints a QR code in the terminal; the sidebar **More → Pair a device**
   menu item shows the same code in the web app.
 - Keeps the computer awake while an agent is working (`keep_awake`).
+- **Compare agents.** Ask two agents the same prompt at once. Option "Both (compare)" creates linked chats with synchronized messaging. Displays tabs on mobile and side-by-side columns on screens >= 1000px with live activity indicators.
 - **Scheduled prompts.** Define recurring prompts in `config.json` running at specific local times on allowed weekdays. Creates a dedicated chat on schedule, runs with a 2-hour grace window, and includes a UI sheet to view next/last run times and trigger manual runs.
 - **Usage history and low-limit alerts.** Logs finished replies with duration, tokens, and cost. Limits sheet includes a 7-day usage breakdown with per-agent activity bars. Configurable low-quota threshold (`"limit_alert_percent"`) records alert state once per reset window.
 - **Codex agent support.** Use OpenAI Codex (`codex`) as a third agent with streaming replies, tool command execution, conversation memory, permission modes (read-only, edit, full access), and configurable model choice via `"codex_models"`.

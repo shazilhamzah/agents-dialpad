@@ -80,6 +80,6 @@ README: "Compare agents". CHANGELOG.
 
 ## Acceptance checklist
 
-- [ ] Part 1 merged on its own with a manual checklist showing no behaviour change.
-- [ ] Both replies stream simultaneously and survive a reload.
-- [ ] Deleting a compare group deletes both chats (with confirmation).
+- [x] Part 1 merged on its own with a manual checklist showing no behaviour change.
+- [x] Both replies stream simultaneously and survive a reload.
+- [x] Deleting a compare group deletes both chats (with confirmation).
