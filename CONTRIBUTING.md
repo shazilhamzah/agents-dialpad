@@ -2,9 +2,6 @@
 
 Thanks for helping. agents-dialpad is small on purpose: plain Python (FastAPI) and a dependency-free PWA.
 
-Looking for something to build? [docs/plans/](docs/plans/README.md) has step-by-step plans for the next features,
-each self-contained, plus the [rules every change must follow](docs/plans/00-rules-for-implementers.md).
-
 ## Setup
 
 ```powershell
