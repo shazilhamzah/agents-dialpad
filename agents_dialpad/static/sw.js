@@ -1,6 +1,6 @@
 // Minimal service worker: makes the app installable and lets the shell open offline.
 // API calls are never cached.
-const CACHE = 'agents-dialpad-shell-v13';
+const CACHE = 'agents-dialpad-shell-v14';
 const SHELL = ['/', '/style.css', '/markdown.js', '/files_util.js', '/app.js', '/manifest.webmanifest', '/icon-192.png', '/logo-mark.svg', '/logo-lockup.svg', '/favicon.ico'];
 
 self.addEventListener('install', (e) => {

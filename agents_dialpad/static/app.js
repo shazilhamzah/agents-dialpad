@@ -1833,6 +1833,8 @@ async function openChanges() {
   dlg.classList.add('wide');
   const body = $('.sheet-body', dlg);
 
+  let currentFiles = [];
+
   async function loadChanges() {
     let data;
     try {
@@ -1850,6 +1852,7 @@ async function openChanges() {
       return;
     }
     const files = data.files || [];
+    currentFiles = files;
     if (!files.length) {
       const title = data.branch ? esc(data.branch) : 'Changes';
       body.innerHTML = `
@@ -1863,7 +1866,7 @@ async function openChanges() {
     const title = data.branch ? esc(data.branch) : 'Changes';
     const countText = `${files.length} changed file${files.length === 1 ? '' : 's'}`;
     const rowsHtml = files.map(f => `
-      <button class="change-row" type="button" data-path="${esc(f.path)}">
+      <button class="change-row" type="button" data-path="${esc(f.path)}" data-code="${esc(f.code)}">
         <span class="change-badge ${esc(f.code)}" aria-label="${esc(f.label)}">${esc(f.code)}</span>
         <span class="change-path">${esc(formatPath(f.path))}</span>
         ${f.orig_path ? `<span class="change-orig">(from ${esc(formatPath(f.orig_path))})</span>` : ''}
@@ -1879,11 +1882,15 @@ async function openChanges() {
     $('#btn-close', body).onclick = () => dlg.close();
 
     $$('.change-row', body).forEach(btn => {
-      btn.onclick = () => showDiff(btn.dataset.path);
+      btn.onclick = () => showDiff(btn.dataset.path, btn.dataset.code);
     });
   }
 
-  async function showDiff(filePath) {
+  async function showDiff(filePath, fileCode) {
+    if (!fileCode) {
+      const f = currentFiles.find(x => x.path === filePath);
+      if (f) fileCode = f.code;
+    }
     body.innerHTML = `
       <div class="diff-top">
         <div class="diff-top-left">
@@ -1913,19 +1920,31 @@ async function openChanges() {
     }
 
     const canRevert = res.kind !== 'untracked';
+    const canView = Boolean(state.info && state.info.file_viewer && fileCode !== 'D');
     body.innerHTML = `
       <div class="diff-top">
         <div class="diff-top-left">
           <button class="btn secondary" type="button" id="btn-diff-back">All changes</button>
           <span class="diff-file-path">${esc(formatPath(filePath))}</span>
         </div>
-        ${canRevert ? '<button class="btn danger" type="button" id="btn-revert">Revert this file</button>' : ''}
+        <div style="display:flex;gap:8px;align-items:center;">
+          ${canView ? '<button class="btn secondary" type="button" id="btn-diff-view">View file</button>' : ''}
+          ${canRevert ? '<button class="btn danger" type="button" id="btn-revert">Revert this file</button>' : ''}
+        </div>
       </div>
       <div class="diff-container">${diffContent}</div>
       <div class="actions"><button class="btn secondary" type="button" id="btn-close">Close</button></div>`;
 
     $('#btn-diff-back', body).onclick = () => loadChanges();
     $('#btn-close', body).onclick = () => dlg.close();
+
+    const viewBtn = $('#btn-diff-view', body);
+    if (viewBtn) {
+      viewBtn.onclick = () => {
+        dlg.close();
+        openFileViewer(project, filePath);
+      };
+    }
 
     const revertBtn = $('#btn-revert', body);
     if (revertBtn) {
@@ -1999,6 +2018,13 @@ async function openFileViewer(project, path) {
   } catch (e) {
     return handleErr(e);
   }
+
+  try {
+    const raw = LS.get('ag_recent_files');
+    const existing = raw ? JSON.parse(raw) : [];
+    const updated = FilesUtil.updateRecentFiles(existing, { project, path, time: Date.now() });
+    LS.set('ag_recent_files', JSON.stringify(updated));
+  } catch (_) {}
 
   if (meta.kind === 'image') {
     return openImageViewer(project, path, meta);
@@ -2423,8 +2449,15 @@ async function openTextViewer(project, path, meta) {
   }
 
   const folderPath = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : '';
-  let viewMode = meta.kind === 'markdown' ? 'rendered' : meta.kind === 'csv' ? 'table' : 'text';
-  let wrapMode = false;
+  let viewMode;
+  if (meta.kind === 'markdown') {
+    viewMode = LS.get('ag_file_pref_markdown') || 'rendered';
+  } else if (meta.kind === 'csv') {
+    viewMode = LS.get('ag_file_pref_csv') || 'table';
+  } else {
+    viewMode = 'text';
+  }
+  let wrapMode = LS.get('ag_file_wrap') === '1';
   let fontSize = parseFloat(LS.get('ag_file_font_size') || '13');
   if (isNaN(fontSize) || fontSize < 9 || fontSize > 24) fontSize = 13;
 
@@ -2461,6 +2494,7 @@ async function openTextViewer(project, path, meta) {
       modeBtn.textContent = viewMode === 'rendered' ? 'Source' : 'Rendered';
       modeBtn.onclick = () => {
         viewMode = viewMode === 'rendered' ? 'text' : 'rendered';
+        LS.set('ag_file_pref_markdown', viewMode);
         renderViewer();
       };
       controls.appendChild(modeBtn);
@@ -2471,6 +2505,7 @@ async function openTextViewer(project, path, meta) {
       modeBtn.textContent = viewMode === 'table' ? 'Source' : 'Table';
       modeBtn.onclick = () => {
         viewMode = viewMode === 'table' ? 'text' : 'table';
+        LS.set('ag_file_pref_csv', viewMode);
         renderViewer();
       };
       controls.appendChild(modeBtn);
@@ -2483,6 +2518,7 @@ async function openTextViewer(project, path, meta) {
       wrapBtn.textContent = wrapMode ? 'No wrap' : 'Wrap';
       wrapBtn.onclick = () => {
         wrapMode = !wrapMode;
+        LS.set('ag_file_wrap', wrapMode ? '1' : '0');
         renderViewer();
       };
       controls.appendChild(wrapBtn);
@@ -2791,6 +2827,42 @@ async function openFiles(initialPath) {
       const parentPath = curPath.includes('/') ? curPath.substring(0, curPath.lastIndexOf('/')) : '';
       const backBtnHtml = curPath ? `<button type="button" class="btn secondary icon-btn" id="btn-folder-back" aria-label="Go up one folder">${icon('back')}</button>` : '';
 
+      let recentHtml = '';
+      let recentEntries = [];
+      if (!curPath && !q) {
+        try {
+          const raw = LS.get('ag_recent_files');
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              recentEntries = parsed.filter((x) => x && x.project === project && x.path);
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (recentEntries.length) {
+        const recentRowsHtml = recentEntries.map((item) => `
+          <button type="button" class="file-row recent-row" data-path="${esc(item.path)}" aria-label="Recent file ${esc(item.path)}">
+            ${icon('file')}
+            <div class="file-row-info">
+              <span class="file-row-name">${esc(item.path)}</span>
+              <span class="file-row-meta">${esc(FilesUtil.ago(item.time))}</span>
+            </div>
+          </button>
+        `).join('');
+
+        recentHtml = `
+          <div class="files-recent-section">
+            <div class="files-recent-header">
+              <span class="files-section-title">Recent</span>
+              <button type="button" class="text-btn" id="btn-clear-recent" aria-label="Clear recent files">Clear</button>
+            </div>
+            <div class="files-recent-list">${recentRowsHtml}</div>
+          </div>
+        `;
+      }
+
       let listHtml = '';
       if (!filtered.length) {
         listHtml = `<div class="files-empty">${q ? 'No matching files' : 'This folder is empty'}</div>`;
@@ -2812,17 +2884,21 @@ async function openFiles(initialPath) {
         }).join('');
       }
 
-      const truncationNotice = data.truncated ? `<div class="files-notice">Showing first 1,000 items in this folder. Use filter to find other files.</div>` : '';
+      const liveNotice = (cur && cur.live) ? `<div class="files-notice">Agent is working here, files may change</div>` : '';
+      const truncationNotice = data.truncated ? `<div class="files-notice files-notice-truncated">Folder contains over 1,000 files. Showing first 1,000; use filter to find files.</div>` : '';
 
       body.innerHTML = `
         <div class="files-top">
           <div class="files-crumbs-bar">
             ${backBtnHtml}
             <div class="files-crumbs">${crumbsHtml}</div>
+            <button type="button" class="btn secondary icon-btn" id="btn-files-refresh" aria-label="Refresh folder">${icon('refresh')}</button>
           </div>
         </div>
-        <input type="search" class="files-filter" placeholder="Filter current folder…" value="${esc(filterQuery)}" aria-label="Filter current folder">
+        ${liveNotice}
         ${truncationNotice}
+        <input type="search" class="files-filter ${data.truncated ? 'prominent' : ''}" placeholder="Filter current folder…" value="${esc(filterQuery)}" aria-label="Filter current folder">
+        ${recentHtml}
         <div class="files-list">${listHtml}</div>
         <div class="actions"><button class="btn secondary" type="button" id="btn-files-close">Close</button></div>
       `;
@@ -2830,8 +2906,24 @@ async function openFiles(initialPath) {
       if ($('#btn-folder-back', body)) {
         $('#btn-folder-back', body).onclick = () => loadFolder(parentPath);
       }
+      const refreshBtn = $('#btn-files-refresh', body);
+      if (refreshBtn) {
+        refreshBtn.onclick = () => loadFolder(curPath);
+      }
       $$('.crumb-btn', body).forEach((btn) => {
         btn.onclick = () => loadFolder(btn.dataset.path);
+      });
+      const clearRecentBtn = $('#btn-clear-recent', body);
+      if (clearRecentBtn) {
+        clearRecentBtn.onclick = () => {
+          LS.remove('ag_recent_files');
+          renderList();
+        };
+      }
+      $$('.recent-row', body).forEach((row) => {
+        row.onclick = () => {
+          openFileViewer(project, row.dataset.path);
+        };
       });
       const filterInput = $('.files-filter', body);
       if (filterInput) {
@@ -2845,7 +2937,7 @@ async function openFiles(initialPath) {
           }
         };
       }
-      $$('.file-row', body).forEach((row) => {
+      $$('.file-row:not(.recent-row)', body).forEach((row) => {
         row.onclick = () => {
           const name = row.dataset.name;
           const kind = row.dataset.kind;

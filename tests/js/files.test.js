@@ -58,3 +58,31 @@ test('chunkLines divides arrays into bounded chunks', () => {
   assert.equal(chunks[2].length, 250);
 });
 
+test('updateRecentFiles dedupes, caps at 10, and maintains newest-first order', () => {
+  let list = [];
+  for (let i = 1; i <= 15; i++) {
+    list = FilesUtil.updateRecentFiles(list, { project: 'p1', path: `file${i}.txt`, time: i * 1000 });
+  }
+  assert.equal(list.length, 10);
+  assert.equal(list[0].path, 'file15.txt');
+  assert.equal(list[9].path, 'file6.txt');
+
+  list = FilesUtil.updateRecentFiles(list, { project: 'p1', path: 'file6.txt', time: 99000 });
+  assert.equal(list.length, 10);
+  assert.equal(list[0].path, 'file6.txt');
+  assert.equal(list[1].path, 'file15.txt');
+});
+
+test('updateRecentFiles strips extra properties and drops invalid entries', () => {
+  const item = { project: 'p1', path: 'secret.txt', time: 12345, content: 'should not be saved', size: 999 };
+  const list = FilesUtil.updateRecentFiles([], item);
+  assert.equal(list.length, 1);
+  assert.deepEqual(list[0], { project: 'p1', path: 'secret.txt', time: 12345 });
+
+  const cleaned = FilesUtil.updateRecentFiles([null, undefined, {}, { project: 'p1' }], { project: 'p2', path: 'ok.txt' });
+  assert.equal(cleaned.length, 1);
+  assert.equal(cleaned[0].path, 'ok.txt');
+});
+
+
+

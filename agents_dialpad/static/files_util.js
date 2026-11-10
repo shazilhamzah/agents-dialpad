@@ -145,6 +145,17 @@
     return chunks;
   }
 
+  function updateRecentFiles(existing, item, maxCount = 10) {
+    const list = Array.isArray(existing) ? existing.filter((x) => x && x.project && x.path) : [];
+    const filtered = list.filter((x) => !(x.project === item.project && x.path === item.path));
+    filtered.unshift({
+      project: item.project,
+      path: item.path,
+      time: item.time || Date.now(),
+    });
+    return filtered.slice(0, maxCount);
+  }
+
   return {
     joinPath,
     crumbs,
@@ -153,5 +164,6 @@
     sniffDelimiter,
     parseCSV,
     chunkLines,
+    updateRecentFiles,
   };
 });

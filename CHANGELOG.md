@@ -6,6 +6,7 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 ## [Unreleased]
 
 ### Added
+- **File viewer polish and integration:** Jump directly to full file view from the git diff screen (hidden for deleted files), keep the 10 most recent files in localStorage with one-tap Clear, quick refresh button for folder contents with live agent working indicator, persistent viewer preferences (Wrap, font size, Rendered/Source view modes), and large folder truncation notices with highlighted search filter.
 - **Image and multi-page PDF viewer:** View images with pinch-to-zoom, pan, double-tap, and 100%/Fit toggle. Preview multi-page PDFs using lazy-loaded, vendored PDF.js rendering pages on-demand to canvas via IntersectionObserver, capped at devicePixelRatio 2, with page navigation indicator, jump-to-page, and Download/Share fallback.
 - **Text, code, Markdown, JSON and CSV viewer:** File viewer sheet with line-numbered code/text view, chunked rendering for large files, Wrap toggle, font sizing, rendered Markdown view with safe HTML escaping, pretty-printed JSON, tabular CSV with sticky headers, in-file Find search, and Download/Share/Copy overflow actions.
 - **Project file browser:** Browse project directories from chat (**More → Files**) with breadcrumb navigation, client-side filtering, file metadata card, and Download/Share via Web Share API.

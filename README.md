@@ -311,6 +311,7 @@ After an agent edits files, tap **More → Changes** in that chat to review what
 
 - View modified, added, deleted, renamed and untracked files compared to the last git commit.
 - Tap any file to inspect its unified diff with color-coded additions and deletions.
+- Tap **View file** on any changed file diff screen to open the full file directly in the file viewer (not shown for deleted files).
 - For tracked files, tap **Revert this file** (with confirmation) to restore the file back to `HEAD`.
 - Reverting is blocked while an agent is actively running in that project.
 
@@ -320,6 +321,7 @@ Browse and open project files from the phone (**More → Files** in any chat):
 
 - **Read-only access:** Browse folders within the chat's project root. No creating, editing, renaming, or deleting.
 - **Preview support:** Line-numbered text/code, rendered Markdown, pretty-printed JSON, tabular CSV, images, and multi-page PDFs.
+- **Recent files & preferences:** Jump quickly to recently opened files, refresh folder contents with live agent working indicator, and automatically save font size, text wrap, and preview modes across sessions.
 - **Safety & secrets denylist:** Denies access to internal app data (`<data>/`), `.git/` folder contents, and secret patterns (`.env`, `*.pem`, `*.key`, `id_rsa*`, etc.). All previews are served with strict sandbox CSP and non-executable MIME types (`text/plain` for HTML/SVG/JS) to prevent script execution in the app origin.
 - **Limits:** Directory listings are capped at 1,000 entries. Text previews are capped at 1 MB (with full file download option). Large images and PDFs over 50 MB display a metadata card with Download only.
 - **Kill switch:** Disable file viewing globally by setting `"file_viewer": false` in `config.json`.
