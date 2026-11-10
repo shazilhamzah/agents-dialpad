@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title-b2b">
+  <title id="title-b2b">agents-dialpad — Concept B2b: The Dial d</title>
+  <path fill="#09090b" fill-rule="evenodd" d="
+    M 158 78.35
+    V 54
+    A 22 22 0 0 1 202 54
+    V 146
+    A 74 74 0 1 1 158 78.35
+    Z
+    M 152.04 121.96
+    L 171.5 141.42
+    A 6.5 6.5 0 0 1 171.5 150.58
+    L 152.04 170.04
+    A 34 34 0 1 1 152.04 121.96
+    Z
+  "/>
+</svg>

@@ -29,6 +29,7 @@ one at a time without needing to understand the whole project first.
 | [D3](D3-codex-without-a-plan.md) | Codex readiness, friendly errors, default model | M | none | Codex greyed out with a hint instead of failing with raw JSON |
 | [D4](D4-lock-screen-approvals.md) | Allow / Deny from the notification | M | D2 | Decide without opening the app (Android, desktop); iPhone jumps to the card |
 | [D5](D5-app-lock.md) | App lock with Face ID / fingerprint | L | B5 | Someone holding your unlocked phone can't use your agents |
+| [E0–E6](E-delegation-router.md) | Delegation router: Groq / Gemini free tiers, then Azure AI Foundry | XL (split) | D5 | Bulky coding work goes to cheap models through MCP; quotas, spend and jobs visible and editable in the app |
 
 Sizes: **S** under a day, **M** a few days, **L** a week or more, for an experienced developer.
 
@@ -41,6 +42,8 @@ Sizes: **S** under a day, **M** a few days, **L** a week or more, for an experie
 4. **D1 → D2 → D3 → D4 → D5** (Phase D). D1 first because it shrinks the chat screen code the others touch. D2 before D4
    (the notification shows the command D2 normalises). D3 is independent. D5 needs its spike first, and fills in D4's
    "no notification buttons on locked phones" rule.
+5. **E0 → E1 → E2 → E3 → E4 → E5 (→ E6)** (Phase E). E0 is a spike with real keys that corrects the plan before any
+   code. E1–E3 make it usable from Claude Code; E4–E5 add the dashboard and editing from the phone. E6 is optional.
 
 Dependencies that matter:
 - **A2** creates the sidebar "More" menu and makes the menu code work for more than one button. B1, B5 and C3 add items to it.
@@ -95,3 +98,10 @@ Tips for the person supervising:
 - [x] D3 Codex readiness
 - [x] D4 Allow / Deny from the notification
 - [x] D5 App lock (spike → feature)
+- [ ] E0 Router spike
+- [ ] E1 Router core + CLI
+- [ ] E2 Validation gate + apply
+- [ ] E3 MCP server + delegate skill
+- [ ] E4 Router dashboard
+- [ ] E5 Editing from the frontend
+- [ ] E6 Router as a chat agent (optional)

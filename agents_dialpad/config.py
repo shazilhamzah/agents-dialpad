@@ -69,6 +69,58 @@ def read_raw() -> dict:
     return json.loads(config_path().read_text(encoding="utf-8-sig"))  # tolerate a BOM from Windows editors
 
 
+def scan_documents_projects(extra_dirs: list[str] | None = None) -> dict[str, str]:
+    dirs_to_scan = [Path.home() / "Documents"] if extra_dirs is None else [Path(d).expanduser().resolve() for d in extra_dirs]
+    out: dict[str, str] = {}
+    for parent in dirs_to_scan:
+        if not parent.is_dir():
+            continue
+        try:
+            for p in parent.iterdir():
+                try:
+                    if not p.is_dir():
+                        continue
+                    name = p.name
+                    if name.startswith((".", "$")):
+                        continue
+                    if name in ("My Music", "My Pictures", "My Videos"):
+                        continue
+                    p_resolved = p.resolve()
+                    if not p_resolved.is_dir():
+                        continue
+                    out[name] = str(p_resolved)
+                except (PermissionError, OSError):
+                    continue
+        except Exception:
+            continue
+    return out
+
+
+def refresh_projects(cfg: dict) -> dict[str, str]:
+    """Refresh cfg["projects"] with scanned folders if scan_documents or scan_dirs is enabled."""
+    scan_docs = cfg.get("scan_documents", False)
+    scan_dirs = cfg.get("scan_dirs", [])
+    if not scan_docs and not scan_dirs:
+        return cfg.get("projects", {})
+
+    target_dirs = []
+    if scan_docs:
+        target_dirs.append(Path.home() / "Documents")
+    if isinstance(scan_dirs, list):
+        for d in scan_dirs:
+            if isinstance(d, str) and d.strip():
+                target_dirs.append(Path(d).expanduser().resolve())
+
+    scanned = scan_documents_projects(extra_dirs=[str(d) for d in target_dirs])
+    projects = cfg.setdefault("projects", {})
+    existing_lower = {k.lower(): k for k in projects}
+    existing_paths = {Path(v).resolve(): k for k, v in projects.items()}
+    for name, path in scanned.items():
+        if name not in projects and name.lower() not in existing_lower and Path(path).resolve() not in existing_paths:
+            projects[name] = path
+    return projects
+
+
 def save_raw(raw: dict) -> None:
     DATA.mkdir(parents=True, exist_ok=True)
     tmp = config_path().with_suffix(".tmp")
@@ -113,6 +165,10 @@ def load() -> tuple[dict, str]:
     cfg["projects"] = norm_projects
     cfg["_project_instructions"] = proj_instructions
     cfg["_invalid_projects"] = invalid_projects
+    cfg.setdefault("scan_documents", False)
+    cfg.setdefault("scan_dirs", [])
+    if cfg.get("scan_documents") or cfg.get("scan_dirs"):
+        refresh_projects(cfg)
     # Optional text file added to every conversation (none by default). Example: "instructions/caveman.md".
     cfg.setdefault("instructions_file", None)
     cfg.setdefault("keep_awake", True)

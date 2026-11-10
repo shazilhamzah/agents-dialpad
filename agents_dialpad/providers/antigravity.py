@@ -59,19 +59,23 @@ class _Parser:
                     out.append({"type": "tool_result", "id": str(sid), "text": "", "is_error": state != "DONE"})
         elif ev == "result":
             r = o.get("result") or {}
-            ok = r.get("status") == "SUCCESS"
-            if ok and r.get("response") and not self.streamed_text:
+            has_response = bool(self.streamed_text or r.get("response"))
+            ok = (r.get("status") == "SUCCESS") or has_response
+            if r.get("response") and not self.streamed_text:
                 out.append({"type": "text", "text": r["response"]})
             denials = [d.get("display_name") or d.get("action") for d in r.get("denied_actions") or [] if isinstance(d, dict)]
-            if ok and not r.get("response") and not self.streamed_text and self.notes:
+            if ok and not has_response and self.notes:
                 out.append({"type": "error", "message": " ".join(self.notes)[:800]})
             secs = r.get("duration_seconds")
             usage = r.get("usage") or {}
+            err_result = None
+            if not ok:
+                err_result = " ".join(self.notes)[:800] if self.notes else (r.get("status") or "FAILED")
             out.append(
                 {
                     "type": "done",
                     "is_error": not ok,
-                    "result": None if ok else (r.get("status") or "FAILED"),
+                    "result": err_result,
                     "cost_usd": None,
                     "duration_ms": int(secs * 1000) if secs else None,
                     "denials": denials,
