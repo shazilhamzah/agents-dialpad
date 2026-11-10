@@ -45,6 +45,11 @@ const ICON = {
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   fingerprint: '<path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 3M14 13.12c0 2.38 0 6.38-1 8.88M2 12a10 10 0 0 1 18-6M2 16a14.66 14.66 0 0 1 3-4M22 12A10 10 0 0 0 12 2a10 10 0 0 0-6.88 2.77M17 13.5a6 6 0 0 0-5-5.5M19 17.5a14 14 0 0 0 .5-3.5M6 21a10 10 0 0 1-.5-3.5c0-1.78.33-3.5 1-5"/>',
   folder: '<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2z"/>',
+  image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+  pdf: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 17v-4h1.5a1.5 1.5 0 0 1 0 3H9"/>',
+  code: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+  refresh: '<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   sidebar: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[n]}</svg>`;
@@ -150,6 +155,7 @@ const state = {
   lockEnabled: false,
   lockIdleMinutes: 5,
   lockChecked: false,
+  fileDirs: {},
 };
 let cur = null;           // the open chat view (see createChatView)
 
@@ -1617,6 +1623,9 @@ function buildPane(chat) {
       { icon: 'download', label: 'Export as Markdown', run: exportChat },
       { icon: 'diff', label: 'Changes', run: openChanges },
     ];
+    if (state.info && state.info.file_viewer) {
+      items.push({ icon: 'folder', label: 'Files', run: openFiles });
+    }
     if (chat.provider === 'claude' && chat.session_id) {
       items.push({ icon: 'term', label: 'Continue on the computer', run: openContinueDeskCmd });
     }
@@ -1943,6 +1952,192 @@ async function openChanges() {
   }
 
   await loadChanges();
+}
+
+/* ===================== file browser & viewer ===================== */
+async function saveFile(project, path, name, btn) {
+  let origText = '';
+  if (btn) {
+    origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Preparing…';
+  }
+  try {
+    const res = await api(`/projects/${encodeURIComponent(project)}/files/content?path=${encodeURIComponent(path)}&download=1`);
+    const blob = await res.blob();
+    const file = new File([blob], name, { type: blob.type || 'application/octet-stream' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: name });
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) {
+    handleErr(e);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = origText;
+    }
+  }
+}
+
+async function openFileViewer(project, path) {
+  return openFileMetadata(project, path);
+}
+
+async function openFileMetadata(project, path) {
+  const dlg = openSheet('<h2>File details</h2><p class="lede">Loading…</p>', 'File details');
+  dlg.classList.add('wide');
+  const body = $('.sheet-body', dlg);
+  try {
+    const meta = await getJSON(`/projects/${encodeURIComponent(project)}/files/meta?path=${encodeURIComponent(path)}`);
+    const iconName = meta.kind === 'image' ? 'image' : meta.kind === 'pdf' ? 'pdf' : (meta.kind === 'text' || meta.kind === 'markdown' || meta.kind === 'json' || meta.kind === 'csv') ? 'code' : 'file';
+    body.innerHTML = `
+      <div class="file-card">
+        <div class="file-card-icon">${icon(iconName)}</div>
+        <h2 class="file-card-name">${esc(meta.name)}</h2>
+        <div class="file-card-meta">
+          <span>${esc(FilesUtil.humanSize(meta.size))}</span> ·
+          <span>${esc(meta.kind)}</span> ·
+          <span>Modified ${esc(FilesUtil.ago(meta.mtime))}</span>
+        </div>
+        <div class="file-card-actions">
+          <button type="button" class="btn primary" id="btn-file-dl">${icon('download')} Download</button>
+          <button type="button" class="btn secondary" id="btn-file-close">Close</button>
+        </div>
+      </div>
+    `;
+    $('#btn-file-dl', body).onclick = (e) => saveFile(project, path, meta.name, e.currentTarget);
+    $('#btn-file-close', body).onclick = () => dlg.close();
+  } catch (e) {
+    dlg.close();
+    handleErr(e);
+  }
+}
+
+async function openFiles(initialPath) {
+  if (!cur || !cur.chat) return;
+  const project = cur.chat.project;
+  let curPath = initialPath !== undefined ? initialPath : (state.fileDirs[project] || '');
+
+  const dlg = openSheet('<h2>Files</h2><p class="lede">Loading…</p>', 'Project files');
+  dlg.classList.add('wide');
+  const body = $('.sheet-body', dlg);
+
+  async function loadFolder(targetPath) {
+    curPath = targetPath || '';
+    state.fileDirs[project] = curPath;
+    body.innerHTML = '<p class="lede">Loading folder…</p>';
+
+    let data;
+    try {
+      data = await getJSON(`/projects/${encodeURIComponent(project)}/files?path=${encodeURIComponent(curPath)}`);
+    } catch (e) {
+      dlg.close();
+      return handleErr(e);
+    }
+
+    const allEntries = data.entries || [];
+    let filterQuery = '';
+
+    function renderList() {
+      const q = filterQuery.trim().toLowerCase();
+      const filtered = q ? allEntries.filter((e) => e.name.toLowerCase().includes(q)) : allEntries;
+
+      const crumbsList = FilesUtil.crumbs(project, curPath);
+      const crumbsHtml = crumbsList.map((c, idx) => {
+        const isLast = idx === crumbsList.length - 1;
+        const btn = `<button type="button" class="crumb-btn" data-path="${esc(c.path)}" aria-label="Folder ${esc(c.name)}">${esc(c.name)}</button>`;
+        return isLast ? btn : `${btn}<span class="crumb-sep">/</span>`;
+      }).join('');
+
+      const parentPath = curPath.includes('/') ? curPath.substring(0, curPath.lastIndexOf('/')) : '';
+      const backBtnHtml = curPath ? `<button type="button" class="btn secondary icon-btn" id="btn-folder-back" aria-label="Go up one folder">${icon('back')}</button>` : '';
+
+      let listHtml = '';
+      if (!filtered.length) {
+        listHtml = `<div class="files-empty">${q ? 'No matching files' : 'This folder is empty'}</div>`;
+      } else {
+        listHtml = filtered.map((item) => {
+          const isDir = item.kind === 'dir';
+          const iconName = isDir ? 'folder' : (item.type === 'image' ? 'image' : item.type === 'pdf' ? 'pdf' : (item.type === 'text' || item.type === 'markdown' || item.type === 'json' || item.type === 'csv') ? 'code' : 'file');
+          const metaText = isDir ? '' : `${FilesUtil.humanSize(item.size)}, ${FilesUtil.ago(item.mtime)}`;
+          return `
+            <button type="button" class="file-row" data-name="${esc(item.name)}" data-kind="${esc(item.kind)}" aria-label="${isDir ? 'Folder ' + esc(item.name) : 'File ' + esc(item.name)}">
+              ${icon(iconName)}
+              <div class="file-row-info">
+                <span class="file-row-name">${esc(item.name)}</span>
+                ${metaText ? `<span class="file-row-meta">${esc(metaText)}</span>` : ''}
+              </div>
+              ${isDir ? icon('chev') : ''}
+            </button>
+          `;
+        }).join('');
+      }
+
+      const truncationNotice = data.truncated ? `<div class="files-notice">Showing first 1,000 items in this folder. Use filter to find other files.</div>` : '';
+
+      body.innerHTML = `
+        <div class="files-top">
+          <div class="files-crumbs-bar">
+            ${backBtnHtml}
+            <div class="files-crumbs">${crumbsHtml}</div>
+          </div>
+        </div>
+        <input type="search" class="files-filter" placeholder="Filter current folder…" value="${esc(filterQuery)}" aria-label="Filter current folder">
+        ${truncationNotice}
+        <div class="files-list">${listHtml}</div>
+        <div class="actions"><button class="btn secondary" type="button" id="btn-files-close">Close</button></div>
+      `;
+
+      if ($('#btn-folder-back', body)) {
+        $('#btn-folder-back', body).onclick = () => loadFolder(parentPath);
+      }
+      $$('.crumb-btn', body).forEach((btn) => {
+        btn.onclick = () => loadFolder(btn.dataset.path);
+      });
+      const filterInput = $('.files-filter', body);
+      if (filterInput) {
+        filterInput.oninput = (e) => {
+          filterQuery = e.target.value;
+          renderList();
+          const newInput = $('.files-filter', body);
+          if (newInput) {
+            newInput.focus();
+            newInput.setSelectionRange(filterQuery.length, filterQuery.length);
+          }
+        };
+      }
+      $$('.file-row', body).forEach((row) => {
+        row.onclick = () => {
+          const name = row.dataset.name;
+          const kind = row.dataset.kind;
+          const fullItemPath = FilesUtil.joinPath(curPath, name);
+          if (kind === 'dir') {
+            loadFolder(fullItemPath);
+          } else {
+            openFileViewer(project, fullItemPath);
+          }
+        };
+      });
+      $('#btn-files-close', body).onclick = () => dlg.close();
+    }
+
+    renderList();
+  }
+
+  await loadFolder(curPath);
 }
 
 async function exportChat() {
