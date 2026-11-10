@@ -2000,10 +2000,412 @@ async function openFileViewer(project, path) {
     return handleErr(e);
   }
 
-  if (!['text', 'markdown', 'json', 'csv'].includes(meta.kind)) {
+  if (meta.kind === 'image') {
+    return openImageViewer(project, path, meta);
+  }
+  if (meta.kind === 'pdf') {
+    return openPdfViewer(project, path, meta);
+  }
+  if (['text', 'markdown', 'json', 'csv'].includes(meta.kind)) {
+    return openTextViewer(project, path, meta);
+  }
+  return openFileMetadata(project, path, meta);
+}
+
+async function openImageViewer(project, path, meta) {
+  if (meta.size > 50 * 1024 * 1024) {
     return openFileMetadata(project, path, meta);
   }
 
+  const dlg = openSheet('<h2>' + esc(meta.name) + '</h2><p class="lede">Loading image…</p>', meta.name);
+  dlg.classList.add('wide');
+  const body = $('.sheet-body', dlg);
+
+  const abortCtrl = new AbortController();
+  dlg.addEventListener('close', () => abortCtrl.abort());
+
+  let objectUrl = null;
+  function cleanup() {
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+      objectUrl = null;
+    }
+  }
+  dlg.addEventListener('close', cleanup);
+
+  try {
+    const res = await api(`/projects/${encodeURIComponent(project)}/files/content?path=${encodeURIComponent(path)}&download=0`, {
+      signal: abortCtrl.signal,
+    });
+    const isSvg = meta.name.toLowerCase().endsWith('.svg');
+    let blob;
+    if (isSvg) {
+      const text = await res.text();
+      blob = new Blob([text], { type: 'image/svg+xml' });
+    } else {
+      blob = await res.blob();
+    }
+    objectUrl = URL.createObjectURL(blob);
+  } catch (e) {
+    if (abortCtrl.signal.aborted) return;
+    dlg.close();
+    return handleErr(e);
+  }
+
+  const folderPath = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : '';
+
+  body.innerHTML = '';
+  const topBar = document.createElement('div');
+  topBar.className = 'viewer-top';
+
+  const topLeft = document.createElement('div');
+  topLeft.className = 'viewer-top-left';
+
+  const backBtn = document.createElement('button');
+  backBtn.type = 'button';
+  backBtn.className = 'btn secondary icon-btn';
+  backBtn.setAttribute('aria-label', 'Back to folder');
+  backBtn.innerHTML = icon('back');
+  backBtn.onclick = () => { dlg.close(); openFiles(folderPath); };
+  topLeft.appendChild(backBtn);
+
+  const titleEl = document.createElement('span');
+  titleEl.className = 'viewer-title';
+  titleEl.textContent = meta.name;
+  topLeft.appendChild(titleEl);
+  topBar.appendChild(topLeft);
+
+  const controls = document.createElement('div');
+  controls.className = 'viewer-controls';
+
+  const fitBtn = document.createElement('button');
+  fitBtn.type = 'button';
+  fitBtn.className = 'btn secondary viewer-toggle-btn';
+  fitBtn.textContent = '100%';
+  controls.appendChild(fitBtn);
+
+  const moreBtn = document.createElement('button');
+  moreBtn.type = 'button';
+  moreBtn.className = 'btn secondary icon-btn';
+  moreBtn.setAttribute('aria-label', 'File options');
+  moreBtn.innerHTML = icon('more');
+  moreBtn.onclick = (e) => {
+    openMenu(e.currentTarget, [
+      { icon: 'download', label: 'Download / Share', run: () => saveFile(project, path, meta.name, moreBtn) },
+      { icon: 'copy', label: 'Copy path', run: async () => { await copyText(path); toast('Path copied'); } },
+    ]);
+  };
+  controls.appendChild(moreBtn);
+  topBar.appendChild(controls);
+  body.appendChild(topBar);
+
+  const box = document.createElement('div');
+  box.className = 'image-viewer-box';
+
+  const img = document.createElement('img');
+  img.className = 'image-viewer-img';
+  img.alt = meta.name;
+  img.src = objectUrl;
+
+  img.onerror = () => {
+    cleanup();
+    dlg.close();
+    openFileMetadata(project, path, meta);
+    toast('Image format not previewable; use Download');
+  };
+
+  box.appendChild(img);
+  body.appendChild(box);
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'btn secondary';
+  closeBtn.textContent = 'Close';
+  closeBtn.onclick = () => dlg.close();
+  actions.appendChild(closeBtn);
+  body.appendChild(actions);
+
+  let scale = 1;
+  let posX = 0;
+  let posY = 0;
+  let isFit = true;
+
+  function updateTransform() {
+    img.style.transform = `translate(${posX}px, ${posY}px) scale(${scale})`;
+    fitBtn.textContent = isFit ? '100%' : 'Fit';
+  }
+
+  fitBtn.onclick = () => {
+    if (isFit) {
+      scale = 2;
+      posX = 0;
+      posY = 0;
+      isFit = false;
+    } else {
+      scale = 1;
+      posX = 0;
+      posY = 0;
+      isFit = true;
+    }
+    updateTransform();
+  };
+
+  const activePointers = new Map();
+  let startDist = 0;
+  let startScale = 1;
+  let lastPanX = 0;
+  let lastPanY = 0;
+  let lastTapTime = 0;
+
+  box.addEventListener('pointerdown', (e) => {
+    box.setPointerCapture(e.pointerId);
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    img.classList.add('dragging');
+
+    if (activePointers.size === 1) {
+      lastPanX = e.clientX;
+      lastPanY = e.clientY;
+      const now = Date.now();
+      if (now - lastTapTime < 300) {
+        fitBtn.click();
+      }
+      lastTapTime = now;
+    } else if (activePointers.size === 2) {
+      const pts = [...activePointers.values()];
+      startDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      startScale = scale;
+    }
+  });
+
+  box.addEventListener('pointermove', (e) => {
+    if (!activePointers.has(e.pointerId)) return;
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (activePointers.size === 1 && scale > 1) {
+      const dx = e.clientX - lastPanX;
+      const dy = e.clientY - lastPanY;
+      posX += dx;
+      posY += dy;
+      lastPanX = e.clientX;
+      lastPanY = e.clientY;
+      updateTransform();
+    } else if (activePointers.size === 2 && startDist > 0) {
+      const pts = [...activePointers.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      scale = Math.max(0.5, Math.min(5, startScale * (dist / startDist)));
+      isFit = Math.abs(scale - 1) < 0.05;
+      updateTransform();
+    }
+  });
+
+  const onPointerUp = (e) => {
+    activePointers.delete(e.pointerId);
+    if (activePointers.size === 0) {
+      img.classList.remove('dragging');
+    } else if (activePointers.size === 1) {
+      const remaining = [...activePointers.values()][0];
+      lastPanX = remaining.x;
+      lastPanY = remaining.y;
+    }
+  };
+  box.addEventListener('pointerup', onPointerUp);
+  box.addEventListener('pointercancel', onPointerUp);
+}
+
+let pdfjsModule = null;
+
+async function openPdfViewer(project, path, meta) {
+  if (meta.size > 50 * 1024 * 1024) {
+    return openFileMetadata(project, path, meta);
+  }
+
+  const dlg = openSheet('<h2>' + esc(meta.name) + '</h2><p class="lede">Loading PDF…</p>', meta.name);
+  dlg.classList.add('wide');
+  const body = $('.sheet-body', dlg);
+
+  const abortCtrl = new AbortController();
+  dlg.addEventListener('close', () => abortCtrl.abort());
+
+  let pdfDoc = null;
+  function cleanup() {
+    if (pdfDoc) {
+      try { pdfDoc.destroy(); } catch {}
+      pdfDoc = null;
+    }
+  }
+  dlg.addEventListener('close', cleanup);
+
+  try {
+    if (!pdfjsModule) {
+      pdfjsModule = await import('/vendor/pdfjs/pdf.min.mjs');
+      pdfjsModule.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.mjs';
+    }
+
+    const res = await api(`/projects/${encodeURIComponent(project)}/files/content?path=${encodeURIComponent(path)}&download=0`, {
+      signal: abortCtrl.signal,
+    });
+    const arrayBuffer = await res.arrayBuffer();
+
+    const loadingTask = pdfjsModule.getDocument({
+      data: arrayBuffer,
+      isEvalSupported: false,
+      cMapPacked: false,
+      disableFontFace: true,
+    });
+    pdfDoc = await loadingTask.promise;
+  } catch (e) {
+    if (abortCtrl.signal.aborted) return;
+    dlg.close();
+    openFileMetadata(project, path, meta);
+    toast("Couldn't display this PDF; use Download");
+    return;
+  }
+
+  const folderPath = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : '';
+  const numPages = pdfDoc.numPages;
+
+  body.innerHTML = '';
+  const topBar = document.createElement('div');
+  topBar.className = 'viewer-top';
+
+  const topLeft = document.createElement('div');
+  topLeft.className = 'viewer-top-left';
+
+  const backBtn = document.createElement('button');
+  backBtn.type = 'button';
+  backBtn.className = 'btn secondary icon-btn';
+  backBtn.setAttribute('aria-label', 'Back to folder');
+  backBtn.innerHTML = icon('back');
+  backBtn.onclick = () => { dlg.close(); openFiles(folderPath); };
+  topLeft.appendChild(backBtn);
+
+  const titleEl = document.createElement('span');
+  titleEl.className = 'viewer-title';
+  titleEl.textContent = meta.name;
+  topLeft.appendChild(titleEl);
+  topBar.appendChild(topLeft);
+
+  const controls = document.createElement('div');
+  controls.className = 'viewer-controls';
+
+  const pageIndicator = document.createElement('span');
+  pageIndicator.className = 'pdf-page-indicator';
+  pageIndicator.textContent = `Page 1 / ${numPages}`;
+  controls.appendChild(pageIndicator);
+
+  const jumpBtn = document.createElement('button');
+  jumpBtn.type = 'button';
+  jumpBtn.className = 'btn secondary viewer-toggle-btn';
+  jumpBtn.textContent = 'Go to…';
+  controls.appendChild(jumpBtn);
+
+  const moreBtn = document.createElement('button');
+  moreBtn.type = 'button';
+  moreBtn.className = 'btn secondary icon-btn';
+  moreBtn.setAttribute('aria-label', 'File options');
+  moreBtn.innerHTML = icon('more');
+  moreBtn.onclick = (e) => {
+    openMenu(e.currentTarget, [
+      { icon: 'download', label: 'Download / Share', run: () => saveFile(project, path, meta.name, moreBtn) },
+      { icon: 'copy', label: 'Copy path', run: async () => { await copyText(path); toast('Path copied'); } },
+    ]);
+  };
+  controls.appendChild(moreBtn);
+  topBar.appendChild(controls);
+  body.appendChild(topBar);
+
+  const pdfContainer = document.createElement('div');
+  pdfContainer.className = 'pdf-viewer-container';
+  body.appendChild(pdfContainer);
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'btn secondary';
+  closeBtn.textContent = 'Close';
+  closeBtn.onclick = () => dlg.close();
+  actions.appendChild(closeBtn);
+  body.appendChild(actions);
+
+  const pageWrappers = [];
+  const renderedPages = new Set();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'pdf-page-wrapper';
+    wrapper.dataset.pageNum = String(pageNum);
+    wrapper.style.minHeight = '300px';
+    wrapper.style.width = 'min(92%, 800px)';
+
+    const stub = document.createElement('div');
+    stub.className = 'pdf-page-stub';
+    stub.textContent = `Page ${pageNum}`;
+    wrapper.appendChild(stub);
+
+    pdfContainer.appendChild(wrapper);
+    pageWrappers.push(wrapper);
+  }
+
+  jumpBtn.onclick = () => {
+    const raw = prompt(`Enter page number (1–${numPages}):`);
+    const targetPage = parseInt(raw, 10);
+    if (!isNaN(targetPage) && targetPage >= 1 && targetPage <= numPages) {
+      pageWrappers[targetPage - 1].scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  async function renderPage(pageNum, wrapper) {
+    if (renderedPages.has(pageNum)) return;
+    renderedPages.add(pageNum);
+    try {
+      const page = await pdfDoc.getPage(pageNum);
+      const initialViewport = page.getViewport({ scale: 1 });
+      const containerWidth = Math.min(pdfContainer.clientWidth * 0.92, 800);
+      const scale = (containerWidth / initialViewport.width);
+      const viewport = page.getViewport({ scale });
+
+      const canvas = document.createElement('canvas');
+      canvas.className = 'pdf-page-canvas';
+      const ctx = canvas.getContext('2d');
+      canvas.width = Math.floor(viewport.width * dpr);
+      canvas.height = Math.floor(viewport.height * dpr);
+      canvas.style.width = `${Math.floor(viewport.width)}px`;
+      canvas.style.height = `${Math.floor(viewport.height)}px`;
+      ctx.scale(dpr, dpr);
+
+      wrapper.innerHTML = '';
+      wrapper.style.minHeight = 'auto';
+      wrapper.appendChild(canvas);
+
+      await page.render({ canvasContext: ctx, viewport }).promise;
+    } catch (err) {
+      wrapper.innerHTML = `<div class="pdf-page-stub">Error rendering page ${pageNum}</div>`;
+    }
+  }
+
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        const pageNum = parseInt(entry.target.dataset.pageNum, 10);
+        pageIndicator.textContent = `Page ${pageNum} / ${numPages}`;
+        renderPage(pageNum, entry.target);
+      }
+    }
+  }, {
+    root: pdfContainer,
+    rootMargin: '200px 0px',
+    threshold: 0.1,
+  });
+
+  pageWrappers.forEach((w) => observer.observe(w));
+  dlg.addEventListener('close', () => observer.disconnect());
+}
+
+async function openTextViewer(project, path, meta) {
   const dlg = openSheet('<h2>' + esc(meta.name) + '</h2><p class="lede">Loading file…</p>', meta.name);
   dlg.classList.add('wide');
   const body = $('.sheet-body', dlg);
@@ -2320,12 +2722,12 @@ async function openFileViewer(project, path) {
   renderViewer();
 }
 
-async function openFileMetadata(project, path) {
+async function openFileMetadata(project, path, preloadedMeta) {
   const dlg = openSheet('<h2>File details</h2><p class="lede">Loading…</p>', 'File details');
   dlg.classList.add('wide');
   const body = $('.sheet-body', dlg);
   try {
-    const meta = await getJSON(`/projects/${encodeURIComponent(project)}/files/meta?path=${encodeURIComponent(path)}`);
+    const meta = preloadedMeta || await getJSON(`/projects/${encodeURIComponent(project)}/files/meta?path=${encodeURIComponent(path)}`);
     const iconName = meta.kind === 'image' ? 'image' : meta.kind === 'pdf' ? 'pdf' : (meta.kind === 'text' || meta.kind === 'markdown' || meta.kind === 'json' || meta.kind === 'csv') ? 'code' : 'file';
     body.innerHTML = `
       <div class="file-card">

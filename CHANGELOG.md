@@ -6,6 +6,7 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 ## [Unreleased]
 
 ### Added
+- **Image and multi-page PDF viewer:** View images with pinch-to-zoom, pan, double-tap, and 100%/Fit toggle. Preview multi-page PDFs using lazy-loaded, vendored PDF.js rendering pages on-demand to canvas via IntersectionObserver, capped at devicePixelRatio 2, with page navigation indicator, jump-to-page, and Download/Share fallback.
 - **Text, code, Markdown, JSON and CSV viewer:** File viewer sheet with line-numbered code/text view, chunked rendering for large files, Wrap toggle, font sizing, rendered Markdown view with safe HTML escaping, pretty-printed JSON, tabular CSV with sticky headers, in-file Find search, and Download/Share/Copy overflow actions.
 - **Project file browser:** Browse project directories from chat (**More → Files**) with breadcrumb navigation, client-side filtering, file metadata card, and Download/Share via Web Share API.
 - **Read-only project files API:** Server endpoints (`/api/projects/{project}/files`, `/files/meta`, `/files/content`) to browse folders, retrieve file metadata, and stream file contents. Includes a secrets denylist (`.env`, `*.pem`, `*.key`, `id_rsa*`, etc.), prevents escaping project roots or reading internal app data (`<data>/`), enforces safe sandbox CSP headers with non-executable content types (`text/plain` for HTML/SVG/JS), supports HTTP Range requests, and adds a `"file_viewer"` kill switch.

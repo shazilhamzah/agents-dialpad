@@ -231,3 +231,21 @@ def test_is_binary_by_nul_byte():
     assert files.is_binary(b"Hello world\n") is False
     assert files.is_binary(b"Hello\0world\n") is True
     assert files.is_binary(b"") is False
+
+
+def test_pdfjs_no_remote_network_urls():
+    import re
+    vendor_dir = Path(__file__).resolve().parent.parent / "agents_dialpad" / "static" / "vendor" / "pdfjs"
+    assert (vendor_dir / "pdf.min.mjs").exists()
+    assert (vendor_dir / "pdf.worker.min.mjs").exists()
+    assert (vendor_dir / "LICENSE").exists()
+
+    for p in vendor_dir.glob("*.mjs"):
+        text = p.read_text(encoding="utf-8", errors="ignore")
+        text_clean = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+        text_clean = re.sub(r"//.*", "", text_clean)
+        found = re.findall(r"https?://[^\s\"\'<>]+", text_clean)
+        # Exclude XML/schema namespaces that are not network fetch targets
+        runtime_fetches = [u for u in found if not any(ns in u for ns in ("w3.org", "adobe.com", "purl.org", "mozilla.org/MPL"))]
+        assert not runtime_fetches, f"Found remote fetch URLs in {p.name}: {runtime_fetches}"
+

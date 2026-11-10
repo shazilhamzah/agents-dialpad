@@ -2143,3 +2143,34 @@ def test_locked_device_gets_423_on_files(env):
     assert r_content.status_code == 423
 
 
+def test_files_content_serves_pdf_inline_with_nosniff(env):
+    client, h = env()
+    ws = config.DATA / "ws"
+    (ws / "sample.pdf").write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF")
+
+    r = client.get("/api/projects/workspace/files/content?path=sample.pdf&download=0", headers=h)
+    assert r.status_code == 200
+    assert r.headers.get("Content-Type") == "application/pdf"
+    assert "inline" in r.headers.get("Content-Disposition", "")
+    assert r.headers.get("X-Content-Type-Options") == "nosniff"
+
+
+def test_image_svg_is_not_served_as_svg_inline_for_view(env):
+    client, h = env()
+    ws = config.DATA / "ws"
+    (ws / "vector.svg").write_text("<svg><script>alert(1)</script></svg>", encoding="utf-8")
+
+    # For view (download=0): MUST NOT be image/svg+xml (it is text/plain; charset=utf-8)
+    r_view = client.get("/api/projects/workspace/files/content?path=vector.svg&download=0", headers=h)
+    assert r_view.status_code == 200
+    assert r_view.headers.get("Content-Type") == "text/plain; charset=utf-8"
+    assert "image/svg+xml" not in r_view.headers.get("Content-Type", "")
+
+    # For download (download=1): application/octet-stream
+    r_dl = client.get("/api/projects/workspace/files/content?path=vector.svg&download=1", headers=h)
+    assert r_dl.status_code == 200
+    assert r_dl.headers.get("Content-Type") == "application/octet-stream"
+    assert "attachment" in r_dl.headers.get("Content-Disposition", "")
+
+
+

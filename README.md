@@ -369,6 +369,12 @@ You can schedule recurring prompts in `config.json`:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
+## Third-party software
+
+This project includes vendored copies of third-party software:
+
+- **PDF.js** (version 4.10.38): Copyright Mozilla and individual contributors. Licensed under the Apache License, Version 2.0. Vendored files located in `agents_dialpad/static/vendor/pdfjs/` with their full license text in `agents_dialpad/static/vendor/pdfjs/LICENSE`.
+
 ## License
 
 [MIT](LICENSE)
