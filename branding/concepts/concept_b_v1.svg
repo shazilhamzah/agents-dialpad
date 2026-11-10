@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title-b">
+  <title id="title-b">Dialtone Logo - Concept B: The Hotline Loop</title>
+  <!-- Lowercase 'd' constructed as an unbroken live-line loop with a terminal prompt core -->
+  <!-- Stem on right: x from 152 to 184 (width 32), y from 36 to 220 -->
+  <!-- Bowl on left: centered at (116, 148), outer radius 72, inner radius 40 (thickness 32) -->
+  <path fill="#09090b" fill-rule="evenodd" d="
+    M 152 36
+    H 184
+    V 220
+    H 152
+    V 194
+    A 72 72 0 1 1 152 102
+    V 36
+    Z
+    M 152 148
+    A 40 40 0 1 0 152 148.01
+    Z
+  "/>
+  <!-- Central pulse node: an active signal core inside the counter -->
+  <circle cx="116" cy="148" r="18" fill="#09090b"/>
+</svg>

@@ -44,6 +44,8 @@ const ICON = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   fingerprint: '<path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 3M14 13.12c0 2.38 0 6.38-1 8.88M2 12a10 10 0 0 1 18-6M2 16a14.66 14.66 0 0 1 3-4M22 12A10 10 0 0 0 12 2a10 10 0 0 0-6.88 2.77M17 13.5a6 6 0 0 0-5-5.5M19 17.5a14 14 0 0 0 .5-3.5M6 21a10 10 0 0 1-.5-3.5c0-1.78.33-3.5 1-5"/>',
+  folder: '<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2z"/>',
+  sidebar: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[n]}</svg>`;
 
@@ -138,6 +140,7 @@ function forgetToken() { LS.del('ag_token'); token = null; }
 const state = {
   chats: [],
   sig: '',
+  loadingChatId: null,
   info: null,
   drafts: {},
   openTools: new Set(),
@@ -243,7 +246,7 @@ async function copyText(text) {
 function showLogin(msg) {
   teardownChat();
   app.innerHTML = `<form class="login" id="login">
-      <h1><img class="login-logo" src="/logo-lockup.svg" alt="agents-dialpad"></h1>
+      <h1><img class="login-logo" src="/logo-lockup.svg" alt="Dialpad"></h1>
       <p>Paste the access token printed when the gateway starts, or open the full link it printed.</p>
       <label for="tok">Access token</label>
       <input id="tok" name="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" required>
@@ -255,16 +258,28 @@ function showLogin(msg) {
 }
 
 /* ===================== shell + chat list ===================== */
+function toggleSidebar(collapse) {
+  const shell = $('.shell'); if (!shell) return;
+  const next = typeof collapse === 'boolean' ? collapse : shell.dataset.sideCollapsed !== 'true';
+  shell.dataset.sideCollapsed = next ? 'true' : 'false';
+  try {
+    if (next) localStorage.setItem('ag_side_collapsed', '1');
+    else localStorage.removeItem('ag_side_collapsed');
+  } catch {}
+}
+
 function mountShell() {
   if ($('.shell')) return;
-  app.innerHTML = `<div class="shell" data-view="list" data-running="false">
+  const savedCollapsed = localStorage.getItem('ag_side_collapsed') === '1';
+  app.innerHTML = `<div class="shell" data-view="list" data-running="false" data-side-collapsed="${savedCollapsed ? 'true' : 'false'}">
     <aside class="side" aria-label="Chats">
       <header class="bar">
-        <div class="titles"><h1 class="brand"><img src="/logo-mark.svg" alt="" width="24" height="24"><span>agents-dialpad</span></h1></div>
+        <div class="titles"><h1 class="brand"><img src="/logo-mark.svg" alt="" width="24" height="24"><span>Dialpad</span></h1></div>
         <button class="icon-btn" id="btn-sched" type="button" aria-label="Schedules" style="display:none">${icon('clock')}</button>
         <button class="icon-btn" id="btn-limits" type="button" aria-label="Usage limits">${icon('gauge')}</button>
         <button class="icon-btn" id="btn-side-more" type="button" aria-label="More" aria-haspopup="menu" aria-expanded="false">${icon('more')}</button>
         <button class="icon-btn" id="btn-new" type="button" aria-label="New chat">${icon('plus')}</button>
+        <button class="icon-btn side-hide-btn" id="btn-side-hide" type="button" aria-label="Collapse sidebar" title="Collapse sidebar (Ctrl+B)">${icon('sidebar')}</button>
       </header>
       <div class="search">${icon('search')}<label class="sr" for="q">Search chats</label><input id="q" type="search" placeholder="Search chats" autocomplete="off" enterkeyhint="search"></div>
       <nav class="chats" id="chat-list" aria-label="Chat list"></nav>
@@ -276,6 +291,7 @@ function mountShell() {
   $('#btn-limits').onclick = openLimits;
   $('#btn-side-more').onclick = (e) => { if ($('#menu')) return closeMenu(); openMenu(e.currentTarget, sideMenuItems()); };
   $('#btn-new').onclick = openNewChat;
+  $('#btn-side-hide').onclick = () => toggleSidebar(true);
   const qInput = $('#q');
   let qTimer = null;
   qInput.oninput = () => {
@@ -316,7 +332,7 @@ function pushSupported() {
 async function enablePush() {
   if (!pushSupported()) {
     if (/iPhone|iPad/.test(navigator.userAgent) && !matchMedia('(display-mode: standalone)').matches) {
-      toast('On iPhone, add agents-dialpad to your Home Screen first, then open it from there.');
+      toast('On iPhone, add Dialpad to your Home Screen first, then open it from there.');
     } else {
       toast("This browser can't receive notifications.");
     }
@@ -496,7 +512,7 @@ async function openPair() {
   try { data = await getJSON('/pair'); } catch (e) { return handleErr(e); }
   const dlg = openSheet(`<h2>Pair a device</h2>
     <p class="lede">Scan with your phone's camera. Anyone who scans this code can use your agents, so don't share it.</p>
-    <div class="qr"><img src="${esc(data.qr)}" alt="QR code that opens agents-dialpad on another device" width="240" height="240"></div>
+    <div class="qr"><img src="${esc(data.qr)}" alt="QR code that opens Dialpad on another device" width="240" height="240"></div>
     ${!data.remote ? '<p class="note">Phone access isn\'t published yet, so this code only works on this computer. Run <code>tailscale serve --bg --https=8443 8787</code> on the computer (see docs/remote-access.md).</p>' : ''}
     <div class="actions"><button class="btn secondary" type="button" id="pair-copy">Copy link</button><button class="btn" type="button" data-close>Done</button></div>`, 'Pair a device');
   $('[data-close]', dlg).onclick = () => dlg.close();
@@ -539,12 +555,57 @@ function ensureLockOverlay() {
       <button id="btn-unlock" class="btn primary" type="button">
         ${icon('fingerprint')}<span>Unlock</span>
       </button>
+      <button id="btn-lock-logout" class="btn secondary" type="button" style="width:100%;margin-top:4px;">Sign out</button>
     </div>
   `;
   document.body.appendChild(overlay);
+  $('#btn-lock-logout', overlay).onclick = () => {
+    try { localStorage.removeItem('ag_lock_enabled'); } catch {}
+    forgetToken();
+    document.body.classList.remove('is-locked');
+    overlay.setAttribute('hidden', '');
+    if (unlockResolve) {
+      unlockResolve(null);
+      activeUnlockPromise = null;
+    }
+    showLogin();
+  };
 }
 
 let activeUnlockPromise = null;
+let unlockResolve = null;
+
+async function fetchUnlockOptions() {
+  const optsRes = await fetch('/api/lock/unlock/options', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  if (optsRes.status === 401) throw new AuthError();
+  if (optsRes.status === 429) {
+    throw new Error('Too many failed attempts. Try again later.');
+  }
+  if (optsRes.status === 400) {
+    const errObj = await optsRes.json().catch(() => ({}));
+    const err = new Error(errObj.detail || 'No passkeys registered for this identity');
+    err.noCreds = true;
+    throw err;
+  }
+  if (!optsRes.ok) {
+    let err = optsRes.statusText;
+    try { err = (await optsRes.json()).detail || err; } catch {}
+    throw new Error(err);
+  }
+  const data = await optsRes.json();
+  const chalId = data.challenge_id;
+  const opts = data.options || data;
+  opts.challenge = base64urlToBuffer(opts.challenge);
+  if (opts.allowCredentials) {
+    opts.allowCredentials.forEach(c => c.id = base64urlToBuffer(c.id));
+  }
+  return { chalId, opts };
+}
+
 function promptUnlock() {
   if (activeUnlockPromise) return activeUnlockPromise;
   ensureLockOverlay();
@@ -553,6 +614,21 @@ function promptUnlock() {
   overlay.removeAttribute('hidden');
   const btn = $('#btn-unlock');
   const msg = $('#lock-msg');
+
+  let prefetchPromise = fetchUnlockOptions().catch((err) => {
+    if (err && err.noCreds) {
+      try { localStorage.removeItem('ag_lock_enabled'); } catch {}
+      state.lockEnabled = false;
+      document.body.classList.remove('is-locked');
+      overlay.setAttribute('hidden', '');
+      if (unlockResolve) {
+        unlockResolve(null);
+        activeUnlockPromise = null;
+      }
+    }
+    return null;
+  });
+
   try {
     if (window.matchMedia && !window.matchMedia('(pointer: coarse)').matches) {
       btn.focus({ focusVisible: false });
@@ -560,36 +636,28 @@ function promptUnlock() {
   } catch {}
 
   activeUnlockPromise = new Promise((resolve) => {
+    unlockResolve = resolve;
+
     async function doUnlock() {
+      if (!window.isSecureContext || !navigator.credentials || !navigator.credentials.get) {
+        toast('WebAuthn passkeys require HTTPS or localhost.');
+        return;
+      }
       try {
         btn.disabled = true;
-        btn.innerHTML = `<span class="spin"></span><span>Waiting for fingerprint or PIN…</span>`;
-        if (msg) msg.textContent = 'Touch your fingerprint sensor or enter device PIN…';
+        btn.innerHTML = `<span class="spin"></span><span>Waiting for passkey…</span>`;
+        if (msg) msg.textContent = 'Touch your fingerprint sensor, Face ID, or PIN…';
 
-        const optsRes = await fetch('/api/lock/unlock/options', {
-          method: 'POST',
-          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-        if (optsRes.status === 401) throw new AuthError();
-        if (optsRes.status === 429) {
-          toast('Too many failed attempts. Try again later.');
-          return;
+        let prep = null;
+        if (prefetchPromise) {
+          prep = await prefetchPromise;
+          prefetchPromise = null;
         }
-        if (!optsRes.ok) {
-          let err = optsRes.statusText;
-          try { err = (await optsRes.json()).detail || err; } catch {}
-          throw new Error(err);
-        }
-        const data = await optsRes.json();
-        const chalId = data.challenge_id;
-        const opts = data.options || data;
-        opts.challenge = base64urlToBuffer(opts.challenge);
-        if (opts.allowCredentials) {
-          opts.allowCredentials.forEach(c => c.id = base64urlToBuffer(c.id));
+        if (!prep) {
+          prep = await fetchUnlockOptions();
         }
 
-        const assertion = await navigator.credentials.get({ publicKey: opts });
+        const assertion = await navigator.credentials.get({ publicKey: prep.opts });
         const assertionJSON = {
           id: assertion.id,
           rawId: bufferToBase64url(assertion.rawId),
@@ -605,7 +673,7 @@ function promptUnlock() {
         const verRes = await fetch('/api/lock/unlock/verify', {
           method: 'POST',
           headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ challenge_id: chalId, credential: assertionJSON }),
+          body: JSON.stringify({ challenge_id: prep.chalId, credential: assertionJSON }),
         });
         if (!verRes.ok) {
           let err = verRes.statusText;
@@ -618,11 +686,24 @@ function promptUnlock() {
           document.body.classList.remove('is-locked');
           overlay.setAttribute('hidden', '');
           resolve(verData.unlock);
+          activeUnlockPromise = null;
+          unlockResolve = null;
         }
       } catch (e) {
+        if (e instanceof AuthError) {
+          forgetToken();
+          document.body.classList.remove('is-locked');
+          overlay.setAttribute('hidden', '');
+          showLogin('That token was rejected. Paste the current one.');
+          resolve(null);
+          activeUnlockPromise = null;
+          unlockResolve = null;
+          return;
+        }
         if (e.name !== 'NotAllowedError') {
           toast(e.message || 'Unlock failed');
         }
+        prefetchPromise = fetchUnlockOptions().catch(() => null);
       } finally {
         btn.disabled = false;
         btn.innerHTML = `${icon('fingerprint')}<span>Unlock</span>`;
@@ -630,9 +711,6 @@ function promptUnlock() {
       }
     }
     btn.onclick = () => doUnlock();
-    doUnlock();
-  }).finally(() => {
-    activeUnlockPromise = null;
   });
   return activeUnlockPromise;
 }
@@ -829,24 +907,29 @@ function renderList() {
     if (btn) btn.onclick = openNewChat;
     return;
   }
-  const activeId = cur && cur.chat.id;
-  const chatRow = (c) => `
+  const activeId = (cur && cur.chat.id) || state.loadingChatId;
+  const chatRow = (c, showProject = false) => `
     <a class="chat-row" href="#/c/${c.id}"${c.id === activeId ? ' aria-current="page"' : ''}>
       <span class="t"><span class="title">${esc(c.title)}</span>
-      <span class="meta">${esc(providerLabel(c.provider))} · ${esc(c.project)} · ${esc(timeAgo(c.updated))}</span></span>
+      <span class="meta">${esc(providerLabel(c.provider))}${showProject && c.project ? ` · ${esc(c.project)}` : ''} · ${esc(timeAgo(c.updated))}</span></span>
       ${c.pinned ? `<span class="pin-badge" aria-hidden="true">${icon('pin')}</span>` : ''}
       ${c.running ? '<span class="dot" role="img" aria-label="Running"></span>' : ''}
     </a>`;
 
-  const items = state.chats.map((c) => ({ pinned: !!c.pinned, html: chatRow(c) }));
-  const pinned = items.filter((i) => i.pinned);
-  const recent = items.filter((i) => !i.pinned);
+  const pinned = state.chats.filter((c) => c.pinned);
+  const unpinned = state.chats.filter((c) => !c.pinned);
   let html = '';
   if (pinned.length) {
-    html += '<div class="chat-sec-label">Pinned</div>' + pinned.map((i) => i.html).join('');
-    if (recent.length) html += '<div class="chat-sec-label">Recent</div>' + recent.map((i) => i.html).join('');
-  } else {
-    html = recent.map((i) => i.html).join('');
+    html += `<div class="chat-sec-label">${icon('pin')}<span>Pinned</span></div>` + pinned.map((c) => chatRow(c, true)).join('');
+  }
+  const groups = new Map();
+  for (const c of unpinned) {
+    const proj = (c.project && c.project.trim()) || 'General';
+    if (!groups.has(proj)) groups.set(proj, []);
+    groups.get(proj).push(c);
+  }
+  for (const [proj, chats] of groups) {
+    html += `<div class="chat-sec-label">${icon('folder')}<span>${esc(proj)}</span></div>` + chats.map((c) => chatRow(c, false)).join('');
   }
   list.innerHTML = html;
 }
@@ -857,7 +940,7 @@ function renderSearchResults(results) {
     list.innerHTML = `<div class="empty"><p class="note">No chats match “${esc(state.query)}”.</p></div>`;
     return;
   }
-  const activeId = cur && cur.chat.id;
+  const activeId = (cur && cur.chat.id) || state.loadingChatId;
   list.innerHTML = results.map((c) => `
     <a class="chat-row" href="#/c/${c.id}"${c.id === activeId ? ' aria-current="page"' : ''}>
       <span class="t"><span class="title">${esc(c.title)}</span>
@@ -1149,23 +1232,44 @@ function showEmptyPane() {
   const pane = $('#pane'); if (!pane) return;
   if (!state.chats.length) {
     pane.innerHTML = `
+      <header class="bar empty-bar">
+        <button class="icon-btn side-expand" id="btn-side-expand" type="button" aria-label="Expand sidebar" title="Expand sidebar (Ctrl+B)">${icon('sidebar')}</button>
+      </header>
       <div class="empty empty-hero">
         <div class="empty-badge">
           <img src="/logo-mark.svg" alt="" class="empty-logo" width="44" height="44">
         </div>
-        <h2 class="empty-title">agents-dialpad</h2>
+        <h2 class="empty-title">Dialpad</h2>
         <p class="empty-sub">Pick up the line to an agent running on this computer.</p>
         <button class="btn primary" id="pane-new" type="button">Start a chat</button>
       </div>`;
     $('#pane-new').onclick = openNewChat;
   } else {
     pane.innerHTML = `
+      <header class="bar empty-bar">
+        <button class="icon-btn side-expand" id="btn-side-expand" type="button" aria-label="Expand sidebar" title="Expand sidebar (Ctrl+B)">${icon('sidebar')}</button>
+      </header>
       <div class="empty">
         ${icon('chat')}
         <p><b>Pick a conversation</b></p>
         <p class="empty-sub">Choose a chat from the sidebar to continue.</p>
       </div>`;
   }
+  const shell = $('.shell'); if (shell) shell.dataset.running = 'false';
+}
+
+function showLoadingPane() {
+  const pane = $('#pane'); if (!pane) return;
+  pane.innerHTML = `
+    <header class="bar">
+      <button class="icon-btn side-expand" id="btn-side-expand" type="button" aria-label="Expand sidebar" title="Expand sidebar (Ctrl+B)">${icon('sidebar')}</button>
+      <a class="icon-btn back" href="#/" aria-label="Back to chats">${icon('back')}</a>
+      <div class="titles"><h2>Loading…</h2></div>
+    </header>
+    <div class="empty">
+      <span class="spin" style="width: 24px; height: 24px;"></span>
+      <p class="empty-sub">Loading chat…</p>
+    </div>`;
   const shell = $('.shell'); if (shell) shell.dataset.running = 'false';
 }
 
@@ -1225,7 +1329,7 @@ function createChatView(chat, els) {
         box.scrollTop = box.scrollHeight;
         if (force) this.stick = true;
       }
-      if (this.els.jump) this.els.jump.hidden = this.stick || !this.live;
+      if (this.els.jump) this.els.jump.hidden = this.stick;
     },
 
     setRunning(on) {
@@ -1324,7 +1428,7 @@ function createChatView(chat, els) {
   if (els.msgs) {
     els.msgs.addEventListener('scroll', () => {
       view.stick = els.msgs.scrollHeight - els.msgs.scrollTop - els.msgs.clientHeight < 80;
-      if (els.jump) els.jump.hidden = view.stick || !view.live;
+      if (els.jump) els.jump.hidden = view.stick;
     }, { passive: true });
   }
   if (els.jump) {
@@ -1340,8 +1444,17 @@ async function openChat(id, approvalReq) {
     return;
   }
   teardownChat();
+  state.loadingChatId = id;
+  showLoadingPane();
+  renderList();
   let chat;
-  try { chat = await getJSON('/chats/' + id); } catch (e) { location.hash = '#/'; return handleErr(e); }
+  try { chat = await getJSON('/chats/' + id); }
+  catch (e) {
+    state.loadingChatId = null;
+    location.hash = '#/';
+    return handleErr(e);
+  }
+  state.loadingChatId = null;
   if (location.hash.split('?')[0] !== '#/c/' + id) return;                        // the user moved on while we loaded
   if (state.quick[chat.project] === undefined) {
     try { state.quick[chat.project] = await getJSON('/projects/' + encodeURIComponent(chat.project) + '/commands'); }
@@ -1387,19 +1500,22 @@ function buildPane(chat) {
         <input type="file" id="file-input" multiple accept="image/*,.pdf,.txt,.md,.csv,.json,.log,.yaml,.yml,.xml,.html,.css,.js,.ts,.py" hidden>
         <button class="icon-btn clip-btn" id="btn-clip" type="button" aria-label="Attach files">${icon('clip')}</button>
         <div class="field"><label class="sr" for="input">Message</label>
-          <textarea id="input" rows="1" placeholder="Message" enterkeyhint="send"></textarea></div>
+          <textarea id="input" rows="1" placeholder="Message" enterkeyhint="enter"></textarea></div>
         <button class="send" id="send" type="submit" aria-label="Send">${icon('up')}</button>
       </div>
     </div>`;
 
   $('#pane').innerHTML = `
     <header class="bar">
+      <button class="icon-btn side-expand" id="btn-side-expand" type="button" aria-label="Expand sidebar" title="Expand sidebar (Ctrl+B)">${icon('sidebar')}</button>
       <a class="icon-btn back" href="#/" aria-label="Back to chats">${icon('back')}</a>
       <div class="titles"><h2 id="title"></h2><span class="sub" id="sub"></span></div>
       <button class="icon-btn" id="btn-more" type="button" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">${icon('more')}</button>
     </header>
-    <div class="msgs" id="msgs" role="log" aria-label="Conversation">
-      <div class="thread" id="thread"></div>
+    <div class="msgs-wrap">
+      <div class="msgs" id="msgs" role="log" aria-label="Conversation">
+        <div class="thread" id="thread"></div>
+      </div>
       <button class="icon-btn jump" id="jump" type="button" aria-label="Scroll to latest message" hidden>${icon('down')}</button>
     </div>
     <div class="sr" id="sr" role="status"></div>
@@ -1522,7 +1638,7 @@ function buildPane(chat) {
     input.addEventListener('input', autosize);
     input.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' || e.isComposing) return;
-      const send = e.ctrlKey || e.metaKey || (!e.shiftKey && matchMedia('(pointer: fine)').matches);
+      const send = e.ctrlKey || e.metaKey;
       if (send) { e.preventDefault(); if (cur && !cur.live) sendMessage(cur); }
     });
     autosize();
@@ -1577,9 +1693,20 @@ async function renameChat() {
   const chat = cur.chat;
   const dlg = openSheet(`<form id="f-rename"><h2>Rename chat</h2>
     <label for="r-title">Chat name</label>
-    <input id="r-title" type="text" maxlength="80" value="${esc(chat.title)}" required>
+    <input id="r-title" type="text" maxlength="80" value="${esc(chat.title)}" required autofocus autocomplete="off">
     <div class="actions"><button class="btn secondary" type="button" data-close>Cancel</button><button class="btn" type="submit" id="r-go">Save</button></div></form>`, 'Rename chat');
   $('[data-close]', dlg).onclick = () => dlg.close();
+  const input = $('#r-title', dlg);
+  if (input) {
+    requestAnimationFrame(() => {
+      input.focus();
+      input.select();
+      input.scrollIntoView({ block: 'center' });
+    });
+    input.addEventListener('focus', () => {
+      setTimeout(() => input.scrollIntoView({ block: 'center', behavior: 'smooth' }), 300);
+    });
+  }
   $('#f-rename', dlg).onsubmit = async (e) => {
     e.preventDefault();
     const val = $('#r-title', dlg).value.trim();
@@ -1888,7 +2015,10 @@ function assistantHTML(events, live) {
       if (ev.duration_ms) bits.push((ev.duration_ms / 1000).toFixed(1) + 's');
       foot = bits.join(' · ');
       denials = [...new Set(ev.denials || [])];
-      if (ev.is_error && ev.result) blocks.push({ kind: 'error', text: ev.result, action: ev.action });
+      const hasText = blocks.some((b) => b.kind === 'text');
+      if (ev.is_error && ev.result && !(hasText && (ev.result === 'ERROR' || ev.result === 'FAILED'))) {
+        blocks.push({ kind: 'error', text: ev.result, action: ev.action });
+      }
     } else if (ev.type === 'error') {
       blocks.push({ kind: 'error', text: ev.message, action: ev.action });
     }
@@ -1995,13 +2125,12 @@ function assistantHTML(events, live) {
     const status = !b.result ? '<span class="st"><span class="spin"></span></span>'
       : b.result.is_error ? `<span class="st err">${icon('x')}</span>` : `<span class="st">${icon('check')}</span>`;
     const head = `<span class="ic">${icon('term')}</span><span class="name">${esc(b.name)}</span><span class="arg">${esc(b.arg)}</span>${status}`;
-    if (b.result && b.result.text) {
-      return `<details class="tool" data-id="${esc(b.id)}"${state.openTools.has(b.id) ? ' open' : ''}><summary>${head}</summary><pre>${esc(b.result.text)}</pre></details>`;
-    }
-    return `<div class="tool"><div class="sum">${head}</div></div>`;
+    const preHtml = (b.result && b.result.text) ? `<pre>${esc(b.result.text)}</pre>` : '';
+    return `<details class="tool" data-id="${esc(b.id)}"${state.openTools.has(b.id) ? ' open' : ''}><summary>${head}</summary>${preHtml}</details>`;
   }).join('');
-  const last = blocks[blocks.length - 1];
-  if (live && (!last || last.kind !== 'text')) html += '<div class="status"><span class="spin"></span><span>Working…</span></div>';
+  if (live) {
+    html += '<div class="status live-working"><span class="spin" aria-hidden="true"></span></div>';
+  }
   if (!live && !html) html = '<p class="foot">No output.</p>';
   if (denials.length) {
     const canFull = state.info && state.info.modes.some((m) => m.id === 'full') && cur && cur.chat.mode !== 'full';
@@ -2148,11 +2277,13 @@ document.addEventListener('toggle', (e) => {
   else state.openTools.delete(d.dataset.id);
 }, true);
 
-/* ---- keep the composer above the on-screen keyboard (iOS does not resize the layout viewport) ---- */
+/* ---- keep composer and sheets above on-screen keyboard (iOS does not resize layout viewport) ---- */
 if (window.visualViewport) {
   const vv = window.visualViewport;
   const sync = () => {
     document.documentElement.style.setProperty('--vh', vv.scale === 1 ? vv.height + 'px' : '100dvh');
+    const kh = Math.max(0, window.innerHeight - vv.height - (vv.offsetTop || 0));
+    document.documentElement.style.setProperty('--keyboard-h', kh + 'px');
     if (vv.scale === 1 && vv.offsetTop) window.scrollTo(0, 0);
   };
   vv.addEventListener('resize', sync); vv.addEventListener('scroll', sync); sync();
@@ -2200,6 +2331,10 @@ async function route() {
         try { localStorage.removeItem('ag_lock_enabled'); } catch {}
         document.body.classList.remove('is-locked');
         $('#lock-overlay')?.setAttribute('hidden', '');
+        if (unlockResolve) {
+          unlockResolve(null);
+          activeUnlockPromise = null;
+        }
       }
     }).catch(() => {});
   }
@@ -2220,5 +2355,24 @@ async function route() {
 }
 addEventListener('hashchange', route);
 route();
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#btn-side-expand')) {
+    toggleSidebar(false);
+  } else if (e.target.closest('#btn-side-hide')) {
+    toggleSidebar(true);
+  }
+});
+
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+    const active = document.activeElement;
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) {
+      return;
+    }
+    e.preventDefault();
+    toggleSidebar();
+  }
+});
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});

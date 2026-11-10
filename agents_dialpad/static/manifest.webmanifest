@@ -1,6 +1,6 @@
 {
-  "name": "agents-dialpad",
-  "short_name": "agents-dialpad",
+  "name": "Dialpad",
+  "short_name": "Dialpad",
   "description": "Chat with the coding agents running on your laptop.",
   "start_url": "/",
   "scope": "/",

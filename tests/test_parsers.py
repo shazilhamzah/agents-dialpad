@@ -168,6 +168,21 @@ def test_agy_failed_status_is_an_error():
     assert done["is_error"] is True and done["result"] == "FAILED"
 
 
+def test_agy_error_status_with_streamed_response_is_not_error():
+    p = antigravity._Parser()
+    p.feed({"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "hello"}})
+    (done,) = p.feed({"event": "result", "result": {"status": "ERROR", "response": ""}})
+    assert done["is_error"] is False and done["result"] is None
+
+
+def test_agy_error_status_with_response_text_is_not_error():
+    p = antigravity._Parser()
+    evs = p.feed({"event": "result", "result": {"status": "ERROR", "response": "answer here"}})
+    assert len(evs) == 2
+    assert evs[0] == {"type": "text", "text": "answer here"}
+    assert evs[1]["is_error"] is False and evs[1]["result"] is None
+
+
 def test_agy_acp_recorded_fixtures():
     import json
     from pathlib import Path
