@@ -139,6 +139,8 @@ Everything lives in `config.json` in the data folder (see [`config.example.json`
 | `codex_default_model` | Model string to use for Codex chats when "Default" is selected (e.g. `"gpt-5.1-custom"`). Default `""` (uses Codex's configured model). |
 | `disabled_agents` | List of agent names to hide completely (e.g. `["codex"]`). Existing chats open read-only. Default `[]`. |
 | `app_lock_idle_minutes` | Inactivity minutes before an unlocked session expires and the app locks again (default 5). |
+| `file_viewer` | Enable read-only project file browsing and previews from the phone. Default `true`. |
+| `file_viewer_deny` | Extra glob patterns to deny viewing and listing (e.g. `["*.secret"]`). Default `[]`. |
 
 ### Access token
 
@@ -311,6 +313,16 @@ After an agent edits files, tap **More → Changes** in that chat to review what
 - Tap any file to inspect its unified diff with color-coded additions and deletions.
 - For tracked files, tap **Revert this file** (with confirmation) to restore the file back to `HEAD`.
 - Reverting is blocked while an agent is actively running in that project.
+
+## Files
+
+Browse and open project files from the phone (**More → Files** in any chat):
+
+- **Read-only access:** Browse folders within the chat's project root. No creating, editing, renaming, or deleting.
+- **Preview support:** Line-numbered text/code, rendered Markdown, pretty-printed JSON, tabular CSV, images, and multi-page PDFs.
+- **Safety & secrets denylist:** Denies access to internal app data (`<data>/`), `.git/` folder contents, and secret patterns (`.env`, `*.pem`, `*.key`, `id_rsa*`, etc.). All previews are served with strict sandbox CSP and non-executable MIME types (`text/plain` for HTML/SVG/JS) to prevent script execution in the app origin.
+- **Limits:** Directory listings are capped at 1,000 entries. Text previews are capped at 1 MB (with full file download option). Large images and PDFs over 50 MB display a metadata card with Download only.
+- **Kill switch:** Disable file viewing globally by setting `"file_viewer": false` in `config.json`.
 
 ## Scheduled prompts
 

@@ -210,6 +210,8 @@ def load() -> tuple[dict, str]:
     cfg.setdefault("app_lock_idle_minutes", 5)
     # Scheduled prompts to run at specific times (empty by default).
     cfg.setdefault("schedules", [])
+    cfg.setdefault("file_viewer", True)
+    cfg.setdefault("file_viewer_deny", [])
 
     token = os.environ.get("AG_TOKEN") or cfg.get("token")
     if token:

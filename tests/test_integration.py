@@ -1987,3 +1987,159 @@ def test_token_is_never_logged(env, monkeypatch, caplog, capsys):
     for record in caplog.records:
         assert plain_token not in record.getMessage()
 
+
+# ------------------------------------------------------------------ G1: Files API
+
+def test_files_routes_need_the_token(env):
+    client, h = env()
+    # No auth header -> 401
+    r_list = client.get("/api/projects/workspace/files")
+    assert r_list.status_code == 401
+
+    r_meta = client.get("/api/projects/workspace/files/meta?path=a.txt")
+    assert r_meta.status_code == 401
+
+    r_content = client.get("/api/projects/workspace/files/content?path=a.txt")
+    assert r_content.status_code == 401
+
+
+def test_files_list_and_read_text_file(env):
+    client, h = env()
+    ws = config.DATA / "ws"
+    (ws / "hello.txt").write_text("Hello, dialpad files!", encoding="utf-8")
+    (ws / "sub").mkdir(exist_ok=True)
+    (ws / "sub" / "nested.py").write_text("print('nested')", encoding="utf-8")
+
+    # List root
+    r = client.get("/api/projects/workspace/files", headers=h)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["path"] == ""
+    assert data["truncated"] is False
+    names = [e["name"] for e in data["entries"]]
+    assert "sub" in names
+    assert "hello.txt" in names
+
+    # Meta
+    r_meta = client.get("/api/projects/workspace/files/meta?path=hello.txt", headers=h)
+    assert r_meta.status_code == 200
+    meta = r_meta.json()
+    assert meta["name"] == "hello.txt"
+    assert meta["kind"] == "text"
+    assert meta["binary"] is False
+    assert meta["previewable"] is True
+    assert meta["truncated_at"] is None
+
+    # Content
+    r_content = client.get("/api/projects/workspace/files/content?path=hello.txt", headers=h)
+    assert r_content.status_code == 200
+    assert r_content.text == "Hello, dialpad files!"
+
+
+def test_files_content_has_security_headers(env):
+    client, h = env()
+    ws = config.DATA / "ws"
+    (ws / "sample.txt").write_text("security check", encoding="utf-8")
+
+    r = client.get("/api/projects/workspace/files/content?path=sample.txt", headers=h)
+    assert r.status_code == 200
+    assert r.headers.get("X-Content-Type-Options") == "nosniff"
+    assert "no-store" in r.headers.get("Cache-Control", "")
+    assert "sandbox" in r.headers.get("Content-Security-Policy", "")
+
+
+def test_files_content_supports_range(env):
+    client, h = env()
+    ws = config.DATA / "ws"
+    content = b"0123456789" * 100
+    (ws / "range.bin").write_bytes(content)
+
+    r = client.get(
+        "/api/projects/workspace/files/content?path=range.bin",
+        headers={**h, "Range": "bytes=10-29"},
+    )
+    assert r.status_code == 206
+    assert r.headers.get("Content-Range") == f"bytes 10-29/{len(content)}"
+    assert r.content == content[10:30]
+
+
+def test_large_text_file_is_truncated_at_one_megabyte(env):
+    client, h = env()
+    ws = config.DATA / "ws"
+    big_size = 1_048_576 + 500
+    (ws / "large.txt").write_bytes(b"a" * big_size)
+
+    # download=0 -> truncated at 1 MB
+    r = client.get("/api/projects/workspace/files/content?path=large.txt&download=0", headers=h)
+    assert r.status_code == 200
+    assert r.headers.get("X-Truncated") == "1"
+    assert len(r.content) == 1_048_576
+
+    # download=1 -> not truncated
+    r_dl = client.get("/api/projects/workspace/files/content?path=large.txt&download=1", headers=h)
+    assert r_dl.status_code == 200
+    assert "X-Truncated" not in r_dl.headers
+    assert len(r_dl.content) == big_size
+
+
+def test_data_folder_token_is_not_readable_through_a_project(env):
+    # Set up client first
+    client, h = env()
+    # Configure project pointing to folder containing config.DATA
+    parent = config.DATA.parent
+    (config.DATA / "token.txt").write_text("secret_tok", encoding="utf-8")
+    client, h = env(projects={"parent": str(parent)})
+
+    rel_token = f"{config.DATA.name}/token.txt"
+    r = client.get(f"/api/projects/parent/files/content?path={rel_token}", headers=h)
+    assert r.status_code == 404
+
+    r_list = client.get("/api/projects/parent/files", headers=h)
+    assert r_list.status_code == 200
+    names = [e["name"] for e in r_list.json()["entries"]]
+    assert config.DATA.name not in names
+
+
+def test_file_viewer_off_returns_404(env):
+    client, h = env(file_viewer=False)
+    ws = config.DATA / "ws"
+    (ws / "test.txt").write_text("test", encoding="utf-8")
+
+    # /api/info reports file_viewer: False
+    info = client.get("/api/info", headers=h).json()
+    assert info["file_viewer"] is False
+
+    # Routes return 404
+    assert client.get("/api/projects/workspace/files", headers=h).status_code == 404
+    assert client.get("/api/projects/workspace/files/meta?path=test.txt", headers=h).status_code == 404
+    assert client.get("/api/projects/workspace/files/content?path=test.txt", headers=h).status_code == 404
+
+
+def test_locked_device_gets_423_on_files(env):
+    from agents_dialpad import applock
+
+    client, h = env()
+    ws = config.DATA / "ws"
+    (ws / "secret.txt").write_text("passkey protected", encoding="utf-8")
+
+    # Set a passkey for owner in LockStore
+    store = applock.LockStore(config.DATA / "lock.json")
+    store.add("owner", {
+        "id": "test_cred_id",
+        "public_key": "dummy_pk",
+        "sign_count": 0,
+        "name": "Owner Key",
+        "created_at": "2026-01-01T00:00:00Z",
+    })
+
+    # Without X-Unlock -> 423 Locked
+    r_list = client.get("/api/projects/workspace/files", headers=h)
+    assert r_list.status_code == 423
+
+    r_meta = client.get("/api/projects/workspace/files/meta?path=secret.txt", headers=h)
+    assert r_meta.status_code == 423
+
+    r_content = client.get("/api/projects/workspace/files/content?path=secret.txt", headers=h)
+    assert r_content.status_code == 423
+
+
