@@ -20,3 +20,9 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Internal planning and branding work (not part of the app)
+docs/plans/
+branding/
+logo-concepts/
+repomix-output.xml
