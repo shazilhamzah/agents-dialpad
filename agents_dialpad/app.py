@@ -10,15 +10,17 @@ import re
 import secrets
 import time
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.responses import FileResponse, PlainTextResponse
 
 from pathlib import Path
 import sys
-from . import applock, config, desk, devices, export, gitview, pairing, push, quick, schedules, uploads
+from . import applock, config, desk, devices, export, files, gitview, pairing, push, quick, schedules, uploads
 from .keepawake import KeepAwake
 from .providers import PLANNED, PROVIDERS
 from .runs import RunManager
@@ -379,6 +381,7 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             "me": who,
             "has_schedules": len(valid_scheds) > 0,
             "disabled_agents": list(cfg.get("disabled_agents", [])),
+            "file_viewer": bool(cfg.get("file_viewer", True)),
         }
 
     @api.get("/pair")
@@ -598,6 +601,129 @@ def create_app(cfg: dict | None = None, token: str | None = None, keep_awake: Ke
             raise HTTPException(501, "git is not installed on this computer")
         except TimeoutError:
             raise HTTPException(504, "git took too long")
+
+    class SafeFileResponse(FileResponse):
+        async def __call__(self, scope, receive, send) -> None:
+            try:
+                await super().__call__(scope, receive, send)
+            except (FileNotFoundError, RuntimeError) as e:
+                if isinstance(e, FileNotFoundError) or "does not exist" in str(e):
+                    res = PlainTextResponse("File not found", status_code=404)
+                    await res(scope, receive, send)
+                else:
+                    raise
+
+    @api.get("/projects/{project}/files")
+    async def list_files_endpoint(project: str, path: str = Query(default="")):
+        if not cfg.get("file_viewer", True):
+            raise HTTPException(404, "File viewer is disabled")
+        check_project_or_refresh(project, 404)
+        root = Path(cfg["projects"][project])
+        try:
+            return await asyncio.to_thread(
+                files.list_dir,
+                root,
+                path,
+                data_dir=config.DATA,
+                extra_deny=tuple(cfg.get("file_viewer_deny", ())),
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except FileNotFoundError:
+            raise HTTPException(404, "Directory not found")
+
+    @api.get("/projects/{project}/files/meta")
+    async def file_meta_endpoint(project: str, path: str = Query(...)):
+        if not cfg.get("file_viewer", True):
+            raise HTTPException(404, "File viewer is disabled")
+        check_project_or_refresh(project, 404)
+        root = Path(cfg["projects"][project])
+        try:
+            target = files.resolve(
+                root,
+                path,
+                data_dir=config.DATA,
+                extra_deny=tuple(cfg.get("file_viewer_deny", ())),
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except FileNotFoundError:
+            raise HTTPException(404, "File not found")
+
+        if target.is_dir():
+            raise HTTPException(400, "That is a folder")
+
+        try:
+            st = target.stat()
+        except OSError:
+            raise HTTPException(404, "File not found")
+
+        kind = files.kind_for(target)
+        binary = (kind == "binary")
+        previewable = False if binary or (kind in ("image", "pdf") and st.st_size > files.MAX_PREVIEW) else True
+        truncated_at = files.MAX_TEXT if kind in ("text", "markdown", "json", "csv") and st.st_size > files.MAX_TEXT else None
+
+        return {
+            "name": target.name,
+            "size": st.st_size,
+            "mtime": int(st.st_mtime),
+            "kind": kind,
+            "binary": binary,
+            "previewable": previewable,
+            "truncated_at": truncated_at,
+        }
+
+    @api.get("/projects/{project}/files/content")
+    async def file_content_endpoint(project: str, path: str = Query(...), download: int = Query(default=0)):
+        if not cfg.get("file_viewer", True):
+            raise HTTPException(404, "File viewer is disabled")
+        check_project_or_refresh(project, 404)
+        root = Path(cfg["projects"][project])
+        try:
+            target = files.resolve(
+                root,
+                path,
+                data_dir=config.DATA,
+                extra_deny=tuple(cfg.get("file_viewer_deny", ())),
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except FileNotFoundError:
+            raise HTTPException(404, "File not found")
+
+        if target.is_dir():
+            raise HTTPException(400, "That is a folder")
+
+        try:
+            st = target.stat()
+        except OSError:
+            raise HTTPException(404, "File not found")
+
+        kind = files.kind_for(target)
+        media_type = files.media_type(target, for_view=(download == 0))
+
+        ascii_fallback = "".join(c for c in target.name if 32 <= ord(c) <= 126 and c not in '"\\') or "file"
+        encoded = quote(target.name, encoding="utf-8")
+        disp_type = "attachment" if download == 1 else "inline"
+        content_disposition = f'{disp_type}; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded}'
+
+        headers = {
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'",
+            "Content-Disposition": content_disposition,
+        }
+
+        if download == 0 and kind in ("text", "markdown", "json", "csv") and st.st_size > files.MAX_TEXT:
+            try:
+                with target.open("rb") as f:
+                    content = f.read(files.MAX_TEXT)
+            except OSError:
+                raise HTTPException(404, "File not found")
+            headers["X-Truncated"] = "1"
+            return Response(content, media_type=media_type, headers=headers)
+
+        return SafeFileResponse(target, stat_result=st, media_type=media_type, headers=headers)
 
     @api.get("/devices")
     def list_devices(who: str = Depends(identity)):
