@@ -78,6 +78,8 @@ def main() -> None:
             check(status == 200 and "markdown.js" in html, "UI is served from inside the installed package")
             check(get(base + "/markdown.js")[0] == 200 and get(base + "/app.js")[0] == 200 and get(base + "/style.css")[0] == 200,
                   "all UI files are present in the wheel")
+            check(get(base + "/vendor/pdfjs/pdf.min.mjs")[0] == 200 and get(base + "/vendor/pdfjs/pdf.worker.min.mjs")[0] == 200,
+                  "pdf.js vendor files are present in the wheel")
             check(get(base + "/api/info")[0] == 401, "API refuses requests without the token")
             status, body = get(base + "/api/info", token)
             check(status == 200 and "projects" in json.loads(body), "API answers with the token")

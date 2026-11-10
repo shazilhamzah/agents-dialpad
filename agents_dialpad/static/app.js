@@ -45,6 +45,11 @@ const ICON = {
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   fingerprint: '<path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 3M14 13.12c0 2.38 0 6.38-1 8.88M2 12a10 10 0 0 1 18-6M2 16a14.66 14.66 0 0 1 3-4M22 12A10 10 0 0 0 12 2a10 10 0 0 0-6.88 2.77M17 13.5a6 6 0 0 0-5-5.5M19 17.5a14 14 0 0 0 .5-3.5M6 21a10 10 0 0 1-.5-3.5c0-1.78.33-3.5 1-5"/>',
   folder: '<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2z"/>',
+  image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+  pdf: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 17v-4h1.5a1.5 1.5 0 0 1 0 3H9"/>',
+  code: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+  refresh: '<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   sidebar: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
 };
 const icon = (n) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[n]}</svg>`;
@@ -150,6 +155,7 @@ const state = {
   lockEnabled: false,
   lockIdleMinutes: 5,
   lockChecked: false,
+  fileDirs: {},
 };
 let cur = null;           // the open chat view (see createChatView)
 
@@ -1617,6 +1623,9 @@ function buildPane(chat) {
       { icon: 'download', label: 'Export as Markdown', run: exportChat },
       { icon: 'diff', label: 'Changes', run: openChanges },
     ];
+    if (state.info && state.info.file_viewer) {
+      items.push({ icon: 'folder', label: 'Files', run: openFiles });
+    }
     if (chat.provider === 'claude' && chat.session_id) {
       items.push({ icon: 'term', label: 'Continue on the computer', run: openContinueDeskCmd });
     }
@@ -1943,6 +1952,918 @@ async function openChanges() {
   }
 
   await loadChanges();
+}
+
+/* ===================== file browser & viewer ===================== */
+async function saveFile(project, path, name, btn) {
+  let origText = '';
+  if (btn) {
+    origText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Preparing…';
+  }
+  try {
+    const res = await api(`/projects/${encodeURIComponent(project)}/files/content?path=${encodeURIComponent(path)}&download=1`);
+    const blob = await res.blob();
+    const file = new File([blob], name, { type: blob.type || 'application/octet-stream' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: name });
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) {
+    handleErr(e);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = origText;
+    }
+  }
+}
+
+async function openFileViewer(project, path) {
+  let meta;
+  try {
+    meta = await getJSON(`/projects/${encodeURIComponent(project)}/files/meta?path=${encodeURIComponent(path)}`);
+  } catch (e) {
+    return handleErr(e);
+  }
+
+  if (meta.kind === 'image') {
+    return openImageViewer(project, path, meta);
+  }
+  if (meta.kind === 'pdf') {
+    return openPdfViewer(project, path, meta);
+  }
+  if (['text', 'markdown', 'json', 'csv'].includes(meta.kind)) {
+    return openTextViewer(project, path, meta);
+  }
+  return openFileMetadata(project, path, meta);
+}
+
+async function openImageViewer(project, path, meta) {
+  if (meta.size > 50 * 1024 * 1024) {
+    return openFileMetadata(project, path, meta);
+  }
+
+  const dlg = openSheet('<h2>' + esc(meta.name) + '</h2><p class="lede">Loading image…</p>', meta.name);
+  dlg.classList.add('wide');
+  const body = $('.sheet-body', dlg);
+
+  const abortCtrl = new AbortController();
+  dlg.addEventListener('close', () => abortCtrl.abort());
+
+  let objectUrl = null;
+  function cleanup() {
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+      objectUrl = null;
+    }
+  }
+  dlg.addEventListener('close', cleanup);
+
+  try {
+    const res = await api(`/projects/${encodeURIComponent(project)}/files/content?path=${encodeURIComponent(path)}&download=0`, {
+      signal: abortCtrl.signal,
+    });
+    const isSvg = meta.name.toLowerCase().endsWith('.svg');
+    let blob;
+    if (isSvg) {
+      const text = await res.text();
+      blob = new Blob([text], { type: 'image/svg+xml' });
+    } else {
+      blob = await res.blob();
+    }
+    objectUrl = URL.createObjectURL(blob);
+  } catch (e) {
+    if (abortCtrl.signal.aborted) return;
+    dlg.close();
+    return handleErr(e);
+  }
+
+  const folderPath = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : '';
+
+  body.innerHTML = '';
+  const topBar = document.createElement('div');
+  topBar.className = 'viewer-top';
+
+  const topLeft = document.createElement('div');
+  topLeft.className = 'viewer-top-left';
+
+  const backBtn = document.createElement('button');
+  backBtn.type = 'button';
+  backBtn.className = 'btn secondary icon-btn';
+  backBtn.setAttribute('aria-label', 'Back to folder');
+  backBtn.innerHTML = icon('back');
+  backBtn.onclick = () => { dlg.close(); openFiles(folderPath); };
+  topLeft.appendChild(backBtn);
+
+  const titleEl = document.createElement('span');
+  titleEl.className = 'viewer-title';
+  titleEl.textContent = meta.name;
+  topLeft.appendChild(titleEl);
+  topBar.appendChild(topLeft);
+
+  const controls = document.createElement('div');
+  controls.className = 'viewer-controls';
+
+  const fitBtn = document.createElement('button');
+  fitBtn.type = 'button';
+  fitBtn.className = 'btn secondary viewer-toggle-btn';
+  fitBtn.textContent = '100%';
+  controls.appendChild(fitBtn);
+
+  const moreBtn = document.createElement('button');
+  moreBtn.type = 'button';
+  moreBtn.className = 'btn secondary icon-btn';
+  moreBtn.setAttribute('aria-label', 'File options');
+  moreBtn.innerHTML = icon('more');
+  moreBtn.onclick = (e) => {
+    openMenu(e.currentTarget, [
+      { icon: 'download', label: 'Download / Share', run: () => saveFile(project, path, meta.name, moreBtn) },
+      { icon: 'copy', label: 'Copy path', run: async () => { await copyText(path); toast('Path copied'); } },
+    ]);
+  };
+  controls.appendChild(moreBtn);
+  topBar.appendChild(controls);
+  body.appendChild(topBar);
+
+  const box = document.createElement('div');
+  box.className = 'image-viewer-box';
+
+  const img = document.createElement('img');
+  img.className = 'image-viewer-img';
+  img.alt = meta.name;
+  img.src = objectUrl;
+
+  img.onerror = () => {
+    cleanup();
+    dlg.close();
+    openFileMetadata(project, path, meta);
+    toast('Image format not previewable; use Download');
+  };
+
+  box.appendChild(img);
+  body.appendChild(box);
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'btn secondary';
+  closeBtn.textContent = 'Close';
+  closeBtn.onclick = () => dlg.close();
+  actions.appendChild(closeBtn);
+  body.appendChild(actions);
+
+  let scale = 1;
+  let posX = 0;
+  let posY = 0;
+  let isFit = true;
+
+  function updateTransform() {
+    img.style.transform = `translate(${posX}px, ${posY}px) scale(${scale})`;
+    fitBtn.textContent = isFit ? '100%' : 'Fit';
+  }
+
+  fitBtn.onclick = () => {
+    if (isFit) {
+      scale = 2;
+      posX = 0;
+      posY = 0;
+      isFit = false;
+    } else {
+      scale = 1;
+      posX = 0;
+      posY = 0;
+      isFit = true;
+    }
+    updateTransform();
+  };
+
+  const activePointers = new Map();
+  let startDist = 0;
+  let startScale = 1;
+  let lastPanX = 0;
+  let lastPanY = 0;
+  let lastTapTime = 0;
+
+  box.addEventListener('pointerdown', (e) => {
+    box.setPointerCapture(e.pointerId);
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    img.classList.add('dragging');
+
+    if (activePointers.size === 1) {
+      lastPanX = e.clientX;
+      lastPanY = e.clientY;
+      const now = Date.now();
+      if (now - lastTapTime < 300) {
+        fitBtn.click();
+      }
+      lastTapTime = now;
+    } else if (activePointers.size === 2) {
+      const pts = [...activePointers.values()];
+      startDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      startScale = scale;
+    }
+  });
+
+  box.addEventListener('pointermove', (e) => {
+    if (!activePointers.has(e.pointerId)) return;
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (activePointers.size === 1 && scale > 1) {
+      const dx = e.clientX - lastPanX;
+      const dy = e.clientY - lastPanY;
+      posX += dx;
+      posY += dy;
+      lastPanX = e.clientX;
+      lastPanY = e.clientY;
+      updateTransform();
+    } else if (activePointers.size === 2 && startDist > 0) {
+      const pts = [...activePointers.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      scale = Math.max(0.5, Math.min(5, startScale * (dist / startDist)));
+      isFit = Math.abs(scale - 1) < 0.05;
+      updateTransform();
+    }
+  });
+
+  const onPointerUp = (e) => {
+    activePointers.delete(e.pointerId);
+    if (activePointers.size === 0) {
+      img.classList.remove('dragging');
+    } else if (activePointers.size === 1) {
+      const remaining = [...activePointers.values()][0];
+      lastPanX = remaining.x;
+      lastPanY = remaining.y;
+    }
+  };
+  box.addEventListener('pointerup', onPointerUp);
+  box.addEventListener('pointercancel', onPointerUp);
+}
+
+let pdfjsModule = null;
+
+async function openPdfViewer(project, path, meta) {
+  if (meta.size > 50 * 1024 * 1024) {
+    return openFileMetadata(project, path, meta);
+  }
+
+  const dlg = openSheet('<h2>' + esc(meta.name) + '</h2><p class="lede">Loading PDF…</p>', meta.name);
+  dlg.classList.add('wide');
+  const body = $('.sheet-body', dlg);
+
+  const abortCtrl = new AbortController();
+  dlg.addEventListener('close', () => abortCtrl.abort());
+
+  let pdfDoc = null;
+  function cleanup() {
+    if (pdfDoc) {
+      try { pdfDoc.destroy(); } catch {}
+      pdfDoc = null;
+    }
+  }
+  dlg.addEventListener('close', cleanup);
+
+  try {
+    if (!pdfjsModule) {
+      pdfjsModule = await import('/vendor/pdfjs/pdf.min.mjs');
+      pdfjsModule.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.mjs';
+    }
+
+    const res = await api(`/projects/${encodeURIComponent(project)}/files/content?path=${encodeURIComponent(path)}&download=0`, {
+      signal: abortCtrl.signal,
+    });
+    const arrayBuffer = await res.arrayBuffer();
+
+    const loadingTask = pdfjsModule.getDocument({
+      data: arrayBuffer,
+      isEvalSupported: false,
+      cMapPacked: false,
+      disableFontFace: true,
+    });
+    pdfDoc = await loadingTask.promise;
+  } catch (e) {
+    if (abortCtrl.signal.aborted) return;
+    dlg.close();
+    openFileMetadata(project, path, meta);
+    toast("Couldn't display this PDF; use Download");
+    return;
+  }
+
+  const folderPath = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : '';
+  const numPages = pdfDoc.numPages;
+
+  body.innerHTML = '';
+  const topBar = document.createElement('div');
+  topBar.className = 'viewer-top';
+
+  const topLeft = document.createElement('div');
+  topLeft.className = 'viewer-top-left';
+
+  const backBtn = document.createElement('button');
+  backBtn.type = 'button';
+  backBtn.className = 'btn secondary icon-btn';
+  backBtn.setAttribute('aria-label', 'Back to folder');
+  backBtn.innerHTML = icon('back');
+  backBtn.onclick = () => { dlg.close(); openFiles(folderPath); };
+  topLeft.appendChild(backBtn);
+
+  const titleEl = document.createElement('span');
+  titleEl.className = 'viewer-title';
+  titleEl.textContent = meta.name;
+  topLeft.appendChild(titleEl);
+  topBar.appendChild(topLeft);
+
+  const controls = document.createElement('div');
+  controls.className = 'viewer-controls';
+
+  const pageIndicator = document.createElement('span');
+  pageIndicator.className = 'pdf-page-indicator';
+  pageIndicator.textContent = `Page 1 / ${numPages}`;
+  controls.appendChild(pageIndicator);
+
+  const jumpBtn = document.createElement('button');
+  jumpBtn.type = 'button';
+  jumpBtn.className = 'btn secondary viewer-toggle-btn';
+  jumpBtn.textContent = 'Go to…';
+  controls.appendChild(jumpBtn);
+
+  const moreBtn = document.createElement('button');
+  moreBtn.type = 'button';
+  moreBtn.className = 'btn secondary icon-btn';
+  moreBtn.setAttribute('aria-label', 'File options');
+  moreBtn.innerHTML = icon('more');
+  moreBtn.onclick = (e) => {
+    openMenu(e.currentTarget, [
+      { icon: 'download', label: 'Download / Share', run: () => saveFile(project, path, meta.name, moreBtn) },
+      { icon: 'copy', label: 'Copy path', run: async () => { await copyText(path); toast('Path copied'); } },
+    ]);
+  };
+  controls.appendChild(moreBtn);
+  topBar.appendChild(controls);
+  body.appendChild(topBar);
+
+  const pdfContainer = document.createElement('div');
+  pdfContainer.className = 'pdf-viewer-container';
+  body.appendChild(pdfContainer);
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'btn secondary';
+  closeBtn.textContent = 'Close';
+  closeBtn.onclick = () => dlg.close();
+  actions.appendChild(closeBtn);
+  body.appendChild(actions);
+
+  const pageWrappers = [];
+  const renderedPages = new Set();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'pdf-page-wrapper';
+    wrapper.dataset.pageNum = String(pageNum);
+    wrapper.style.minHeight = '300px';
+    wrapper.style.width = 'min(92%, 800px)';
+
+    const stub = document.createElement('div');
+    stub.className = 'pdf-page-stub';
+    stub.textContent = `Page ${pageNum}`;
+    wrapper.appendChild(stub);
+
+    pdfContainer.appendChild(wrapper);
+    pageWrappers.push(wrapper);
+  }
+
+  jumpBtn.onclick = () => {
+    const raw = prompt(`Enter page number (1–${numPages}):`);
+    const targetPage = parseInt(raw, 10);
+    if (!isNaN(targetPage) && targetPage >= 1 && targetPage <= numPages) {
+      pageWrappers[targetPage - 1].scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  async function renderPage(pageNum, wrapper) {
+    if (renderedPages.has(pageNum)) return;
+    renderedPages.add(pageNum);
+    try {
+      const page = await pdfDoc.getPage(pageNum);
+      const initialViewport = page.getViewport({ scale: 1 });
+      const containerWidth = Math.min(pdfContainer.clientWidth * 0.92, 800);
+      const scale = (containerWidth / initialViewport.width);
+      const viewport = page.getViewport({ scale });
+
+      const canvas = document.createElement('canvas');
+      canvas.className = 'pdf-page-canvas';
+      const ctx = canvas.getContext('2d');
+      canvas.width = Math.floor(viewport.width * dpr);
+      canvas.height = Math.floor(viewport.height * dpr);
+      canvas.style.width = `${Math.floor(viewport.width)}px`;
+      canvas.style.height = `${Math.floor(viewport.height)}px`;
+      ctx.scale(dpr, dpr);
+
+      wrapper.innerHTML = '';
+      wrapper.style.minHeight = 'auto';
+      wrapper.appendChild(canvas);
+
+      await page.render({ canvasContext: ctx, viewport }).promise;
+    } catch (err) {
+      wrapper.innerHTML = `<div class="pdf-page-stub">Error rendering page ${pageNum}</div>`;
+    }
+  }
+
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        const pageNum = parseInt(entry.target.dataset.pageNum, 10);
+        pageIndicator.textContent = `Page ${pageNum} / ${numPages}`;
+        renderPage(pageNum, entry.target);
+      }
+    }
+  }, {
+    root: pdfContainer,
+    rootMargin: '200px 0px',
+    threshold: 0.1,
+  });
+
+  pageWrappers.forEach((w) => observer.observe(w));
+  dlg.addEventListener('close', () => observer.disconnect());
+}
+
+async function openTextViewer(project, path, meta) {
+  const dlg = openSheet('<h2>' + esc(meta.name) + '</h2><p class="lede">Loading file…</p>', meta.name);
+  dlg.classList.add('wide');
+  const body = $('.sheet-body', dlg);
+
+  let rawText = '';
+  let isTruncated = false;
+  try {
+    const res = await api(`/projects/${encodeURIComponent(project)}/files/content?path=${encodeURIComponent(path)}&download=0`);
+    isTruncated = res.headers.get('X-Truncated') === '1';
+    const blob = await res.blob();
+    rawText = await blob.text();
+  } catch (e) {
+    dlg.close();
+    return handleErr(e);
+  }
+
+  const folderPath = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : '';
+  let viewMode = meta.kind === 'markdown' ? 'rendered' : meta.kind === 'csv' ? 'table' : 'text';
+  let wrapMode = false;
+  let fontSize = parseFloat(LS.get('ag_file_font_size') || '13');
+  if (isNaN(fontSize) || fontSize < 9 || fontSize > 24) fontSize = 13;
+
+  function renderViewer() {
+    body.innerHTML = '';
+
+    const topBar = document.createElement('div');
+    topBar.className = 'viewer-top';
+
+    const topLeft = document.createElement('div');
+    topLeft.className = 'viewer-top-left';
+
+    const backBtn = document.createElement('button');
+    backBtn.type = 'button';
+    backBtn.className = 'btn secondary icon-btn';
+    backBtn.setAttribute('aria-label', 'Back to folder');
+    backBtn.innerHTML = icon('back');
+    backBtn.onclick = () => { dlg.close(); openFiles(folderPath); };
+    topLeft.appendChild(backBtn);
+
+    const titleEl = document.createElement('span');
+    titleEl.className = 'viewer-title';
+    titleEl.textContent = meta.name;
+    topLeft.appendChild(titleEl);
+    topBar.appendChild(topLeft);
+
+    const controls = document.createElement('div');
+    controls.className = 'viewer-controls';
+
+    if (meta.kind === 'markdown') {
+      const modeBtn = document.createElement('button');
+      modeBtn.type = 'button';
+      modeBtn.className = 'btn secondary viewer-toggle-btn';
+      modeBtn.textContent = viewMode === 'rendered' ? 'Source' : 'Rendered';
+      modeBtn.onclick = () => {
+        viewMode = viewMode === 'rendered' ? 'text' : 'rendered';
+        renderViewer();
+      };
+      controls.appendChild(modeBtn);
+    } else if (meta.kind === 'csv') {
+      const modeBtn = document.createElement('button');
+      modeBtn.type = 'button';
+      modeBtn.className = 'btn secondary viewer-toggle-btn';
+      modeBtn.textContent = viewMode === 'table' ? 'Source' : 'Table';
+      modeBtn.onclick = () => {
+        viewMode = viewMode === 'table' ? 'text' : 'table';
+        renderViewer();
+      };
+      controls.appendChild(modeBtn);
+    }
+
+    if (viewMode === 'text') {
+      const wrapBtn = document.createElement('button');
+      wrapBtn.type = 'button';
+      wrapBtn.className = 'btn secondary viewer-toggle-btn';
+      wrapBtn.textContent = wrapMode ? 'No wrap' : 'Wrap';
+      wrapBtn.onclick = () => {
+        wrapMode = !wrapMode;
+        renderViewer();
+      };
+      controls.appendChild(wrapBtn);
+
+      const fontDown = document.createElement('button');
+      fontDown.type = 'button';
+      fontDown.className = 'btn secondary viewer-toggle-btn';
+      fontDown.textContent = 'A-';
+      fontDown.onclick = () => {
+        fontSize = Math.max(9, fontSize - 1);
+        LS.set('ag_file_font_size', fontSize);
+        const codeBox = $('.code-viewer-body', body);
+        if (codeBox) codeBox.style.fontSize = `${fontSize}px`;
+      };
+      controls.appendChild(fontDown);
+
+      const fontUp = document.createElement('button');
+      fontUp.type = 'button';
+      fontUp.className = 'btn secondary viewer-toggle-btn';
+      fontUp.textContent = 'A+';
+      fontUp.onclick = () => {
+        fontSize = Math.min(24, fontSize + 1);
+        LS.set('ag_file_font_size', fontSize);
+        const codeBox = $('.code-viewer-body', body);
+        if (codeBox) codeBox.style.fontSize = `${fontSize}px`;
+      };
+      controls.appendChild(fontUp);
+    }
+
+    const moreBtn = document.createElement('button');
+    moreBtn.type = 'button';
+    moreBtn.className = 'btn secondary icon-btn';
+    moreBtn.setAttribute('aria-label', 'File options');
+    moreBtn.innerHTML = icon('more');
+    moreBtn.onclick = (e) => {
+      openMenu(e.currentTarget, [
+        { icon: 'download', label: 'Download / Share', run: () => saveFile(project, path, meta.name, moreBtn) },
+        { icon: 'copy', label: 'Copy path', run: async () => { await copyText(path); toast('Path copied'); } },
+        { icon: 'copy', label: 'Copy contents', run: async () => { await copyText(rawText); toast('Contents copied'); } },
+      ]);
+    };
+    controls.appendChild(moreBtn);
+    topBar.appendChild(controls);
+    body.appendChild(topBar);
+
+    if (isTruncated) {
+      const truncBanner = document.createElement('div');
+      truncBanner.className = 'files-notice';
+      truncBanner.style.display = 'flex';
+      truncBanner.style.justifyContent = 'space-between';
+      truncBanner.style.alignItems = 'center';
+      truncBanner.innerHTML = `<span>Showing the first 1 MB.</span>`;
+      const dlBtn = document.createElement('button');
+      dlBtn.type = 'button';
+      dlBtn.className = 'btn secondary';
+      dlBtn.style.minHeight = '32px';
+      dlBtn.style.padding = '2px 8px';
+      dlBtn.textContent = 'Download full file';
+      dlBtn.onclick = () => saveFile(project, path, meta.name, dlBtn);
+      truncBanner.appendChild(dlBtn);
+      body.appendChild(truncBanner);
+    }
+
+    if (viewMode === 'rendered' && meta.kind === 'markdown') {
+      const mdBox = document.createElement('div');
+      mdBox.className = 'markdown-preview-box';
+      mdBox.innerHTML = Markdown.render(rawText);
+      body.appendChild(mdBox);
+    } else if (viewMode === 'table' && meta.kind === 'csv') {
+      const csvBox = document.createElement('div');
+      csvBox.className = 'csv-box';
+      const rows = FilesUtil.parseCSV(rawText);
+      if (!rows.length) {
+        csvBox.innerHTML = '<div class="files-empty">Empty CSV file</div>';
+      } else {
+        const table = document.createElement('table');
+        table.className = 'csv-table';
+        const thead = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+        const headerCols = rows[0];
+        for (const col of headerCols) {
+          const th = document.createElement('th');
+          th.textContent = col;
+          headerRow.appendChild(th);
+        }
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement('tbody');
+        const dataRows = rows.slice(1, 501);
+        for (const row of dataRows) {
+          const tr = document.createElement('tr');
+          for (let c = 0; c < headerCols.length; c++) {
+            const td = document.createElement('td');
+            td.textContent = row[c] != null ? row[c] : '';
+            tr.appendChild(td);
+          }
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        csvBox.appendChild(table);
+
+        if (rows.length > 501) {
+          const moreNotice = document.createElement('div');
+          moreNotice.className = 'files-notice';
+          moreNotice.textContent = `Showing first 500 of ${rows.length - 1} rows.`;
+          csvBox.appendChild(moreNotice);
+        }
+      }
+      body.appendChild(csvBox);
+    } else {
+      let displayText = rawText;
+      let jsonErrorNote = '';
+      if (meta.kind === 'json') {
+        try {
+          displayText = JSON.stringify(JSON.parse(rawText), null, 2);
+        } catch {
+          jsonErrorNote = '<div class="files-notice">Not valid JSON</div>';
+        }
+      }
+
+      if (jsonErrorNote) {
+        const errDiv = document.createElement('div');
+        errDiv.innerHTML = jsonErrorNote;
+        body.appendChild(errDiv);
+      }
+
+      const codeContainer = document.createElement('div');
+      codeContainer.className = 'code-viewer-container';
+
+      const findBar = document.createElement('div');
+      findBar.className = 'find-bar';
+      const findInput = document.createElement('input');
+      findInput.type = 'search';
+      findInput.placeholder = 'Find in file…';
+      findInput.setAttribute('aria-label', 'Find in file');
+      const findCount = document.createElement('span');
+      findCount.className = 'find-count';
+      findBar.appendChild(findInput);
+      findBar.appendChild(findCount);
+      codeContainer.appendChild(findBar);
+
+      const codeBody = document.createElement('div');
+      codeBody.className = `code-viewer-body ${wrapMode ? 'wrap' : 'nowrap'}`;
+      codeBody.style.fontSize = `${fontSize}px`;
+      codeContainer.appendChild(codeBody);
+      body.appendChild(codeContainer);
+
+      const lines = displayText.split(/\r\n|\r|\n/);
+      const chunks = FilesUtil.chunkLines(lines, 500);
+
+      let lineOffset = 0;
+      function renderChunk(chunkIndex) {
+        if (chunkIndex >= chunks.length) return;
+        const currentChunk = chunks[chunkIndex];
+        const frag = document.createDocumentFragment();
+        for (let i = 0; i < currentChunk.length; i++) {
+          const lineEl = document.createElement('div');
+          lineEl.className = 'code-line';
+
+          const numEl = document.createElement('span');
+          numEl.className = 'code-line-num';
+          numEl.textContent = String(lineOffset + i + 1);
+
+          const textEl = document.createElement('span');
+          textEl.className = 'code-line-text';
+          textEl.textContent = currentChunk[i] || ' ';
+
+          lineEl.appendChild(numEl);
+          lineEl.appendChild(textEl);
+          frag.appendChild(lineEl);
+        }
+        codeBody.appendChild(frag);
+        lineOffset += currentChunk.length;
+
+        if (chunkIndex + 1 < chunks.length) {
+          requestAnimationFrame(() => renderChunk(chunkIndex + 1));
+        }
+      }
+      renderChunk(0);
+
+      findInput.oninput = () => {
+        const query = findInput.value;
+        $$('mark.search-match', codeBody).forEach((m) => {
+          const parent = m.parentNode;
+          if (parent) {
+            parent.replaceChild(document.createTextNode(m.textContent), m);
+            parent.normalize();
+          }
+        });
+        if (!query) {
+          findCount.textContent = '';
+          return;
+        }
+        let matches = 0;
+        const textNodes = $$('.code-line-text', codeBody);
+        const lowerQ = query.toLowerCase();
+        for (const tNode of textNodes) {
+          const original = tNode.textContent;
+          const lowerOrig = original.toLowerCase();
+          if (lowerOrig.includes(lowerQ)) {
+            tNode.textContent = '';
+            let lastIdx = 0;
+            let idx = lowerOrig.indexOf(lowerQ, lastIdx);
+            while (idx !== -1) {
+              matches++;
+              if (idx > lastIdx) {
+                tNode.appendChild(document.createTextNode(original.substring(lastIdx, idx)));
+              }
+              const mark = document.createElement('mark');
+              mark.className = 'search-match';
+              mark.textContent = original.substring(idx, idx + query.length);
+              tNode.appendChild(mark);
+              lastIdx = idx + query.length;
+              idx = lowerOrig.indexOf(lowerQ, lastIdx);
+            }
+            if (lastIdx < original.length) {
+              tNode.appendChild(document.createTextNode(original.substring(lastIdx)));
+            }
+          }
+        }
+        findCount.textContent = `${matches} match${matches === 1 ? '' : 'es'}`;
+      };
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn secondary';
+    closeBtn.textContent = 'Close';
+    closeBtn.onclick = () => dlg.close();
+    actions.appendChild(closeBtn);
+    body.appendChild(actions);
+  }
+
+  renderViewer();
+}
+
+async function openFileMetadata(project, path, preloadedMeta) {
+  const dlg = openSheet('<h2>File details</h2><p class="lede">Loading…</p>', 'File details');
+  dlg.classList.add('wide');
+  const body = $('.sheet-body', dlg);
+  try {
+    const meta = preloadedMeta || await getJSON(`/projects/${encodeURIComponent(project)}/files/meta?path=${encodeURIComponent(path)}`);
+    const iconName = meta.kind === 'image' ? 'image' : meta.kind === 'pdf' ? 'pdf' : (meta.kind === 'text' || meta.kind === 'markdown' || meta.kind === 'json' || meta.kind === 'csv') ? 'code' : 'file';
+    body.innerHTML = `
+      <div class="file-card">
+        <div class="file-card-icon">${icon(iconName)}</div>
+        <h2 class="file-card-name">${esc(meta.name)}</h2>
+        <div class="file-card-meta">
+          <span>${esc(FilesUtil.humanSize(meta.size))}</span> ·
+          <span>${esc(meta.kind)}</span> ·
+          <span>Modified ${esc(FilesUtil.ago(meta.mtime))}</span>
+        </div>
+        <div class="file-card-actions">
+          <button type="button" class="btn primary" id="btn-file-dl">${icon('download')} Download</button>
+          <button type="button" class="btn secondary" id="btn-file-close">Close</button>
+        </div>
+      </div>
+    `;
+    $('#btn-file-dl', body).onclick = (e) => saveFile(project, path, meta.name, e.currentTarget);
+    $('#btn-file-close', body).onclick = () => dlg.close();
+  } catch (e) {
+    dlg.close();
+    handleErr(e);
+  }
+}
+
+async function openFiles(initialPath) {
+  if (!cur || !cur.chat) return;
+  const project = cur.chat.project;
+  let curPath = initialPath !== undefined ? initialPath : (state.fileDirs[project] || '');
+
+  const dlg = openSheet('<h2>Files</h2><p class="lede">Loading…</p>', 'Project files');
+  dlg.classList.add('wide');
+  const body = $('.sheet-body', dlg);
+
+  async function loadFolder(targetPath) {
+    curPath = targetPath || '';
+    state.fileDirs[project] = curPath;
+    body.innerHTML = '<p class="lede">Loading folder…</p>';
+
+    let data;
+    try {
+      data = await getJSON(`/projects/${encodeURIComponent(project)}/files?path=${encodeURIComponent(curPath)}`);
+    } catch (e) {
+      dlg.close();
+      return handleErr(e);
+    }
+
+    const allEntries = data.entries || [];
+    let filterQuery = '';
+
+    function renderList() {
+      const q = filterQuery.trim().toLowerCase();
+      const filtered = q ? allEntries.filter((e) => e.name.toLowerCase().includes(q)) : allEntries;
+
+      const crumbsList = FilesUtil.crumbs(project, curPath);
+      const crumbsHtml = crumbsList.map((c, idx) => {
+        const isLast = idx === crumbsList.length - 1;
+        const btn = `<button type="button" class="crumb-btn" data-path="${esc(c.path)}" aria-label="Folder ${esc(c.name)}">${esc(c.name)}</button>`;
+        return isLast ? btn : `${btn}<span class="crumb-sep">/</span>`;
+      }).join('');
+
+      const parentPath = curPath.includes('/') ? curPath.substring(0, curPath.lastIndexOf('/')) : '';
+      const backBtnHtml = curPath ? `<button type="button" class="btn secondary icon-btn" id="btn-folder-back" aria-label="Go up one folder">${icon('back')}</button>` : '';
+
+      let listHtml = '';
+      if (!filtered.length) {
+        listHtml = `<div class="files-empty">${q ? 'No matching files' : 'This folder is empty'}</div>`;
+      } else {
+        listHtml = filtered.map((item) => {
+          const isDir = item.kind === 'dir';
+          const iconName = isDir ? 'folder' : (item.type === 'image' ? 'image' : item.type === 'pdf' ? 'pdf' : (item.type === 'text' || item.type === 'markdown' || item.type === 'json' || item.type === 'csv') ? 'code' : 'file');
+          const metaText = isDir ? '' : `${FilesUtil.humanSize(item.size)}, ${FilesUtil.ago(item.mtime)}`;
+          return `
+            <button type="button" class="file-row" data-name="${esc(item.name)}" data-kind="${esc(item.kind)}" aria-label="${isDir ? 'Folder ' + esc(item.name) : 'File ' + esc(item.name)}">
+              ${icon(iconName)}
+              <div class="file-row-info">
+                <span class="file-row-name">${esc(item.name)}</span>
+                ${metaText ? `<span class="file-row-meta">${esc(metaText)}</span>` : ''}
+              </div>
+              ${isDir ? icon('chev') : ''}
+            </button>
+          `;
+        }).join('');
+      }
+
+      const truncationNotice = data.truncated ? `<div class="files-notice">Showing first 1,000 items in this folder. Use filter to find other files.</div>` : '';
+
+      body.innerHTML = `
+        <div class="files-top">
+          <div class="files-crumbs-bar">
+            ${backBtnHtml}
+            <div class="files-crumbs">${crumbsHtml}</div>
+          </div>
+        </div>
+        <input type="search" class="files-filter" placeholder="Filter current folder…" value="${esc(filterQuery)}" aria-label="Filter current folder">
+        ${truncationNotice}
+        <div class="files-list">${listHtml}</div>
+        <div class="actions"><button class="btn secondary" type="button" id="btn-files-close">Close</button></div>
+      `;
+
+      if ($('#btn-folder-back', body)) {
+        $('#btn-folder-back', body).onclick = () => loadFolder(parentPath);
+      }
+      $$('.crumb-btn', body).forEach((btn) => {
+        btn.onclick = () => loadFolder(btn.dataset.path);
+      });
+      const filterInput = $('.files-filter', body);
+      if (filterInput) {
+        filterInput.oninput = (e) => {
+          filterQuery = e.target.value;
+          renderList();
+          const newInput = $('.files-filter', body);
+          if (newInput) {
+            newInput.focus();
+            newInput.setSelectionRange(filterQuery.length, filterQuery.length);
+          }
+        };
+      }
+      $$('.file-row', body).forEach((row) => {
+        row.onclick = () => {
+          const name = row.dataset.name;
+          const kind = row.dataset.kind;
+          const fullItemPath = FilesUtil.joinPath(curPath, name);
+          if (kind === 'dir') {
+            loadFolder(fullItemPath);
+          } else {
+            openFileViewer(project, fullItemPath);
+          }
+        };
+      });
+      $('#btn-files-close', body).onclick = () => dlg.close();
+    }
+
+    renderList();
+  }
+
+  await loadFolder(curPath);
 }
 
 async function exportChat() {
