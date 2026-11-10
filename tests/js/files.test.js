@@ -41,3 +41,20 @@ test('ago formats timestamps relative to now', () => {
   assert.equal(FilesUtil.ago(now - 172800), '2d ago');
   assert.equal(FilesUtil.ago(null), '');
 });
+
+test('sniffDelimiter detects comma, semicolon, and tab', () => {
+  assert.equal(FilesUtil.sniffDelimiter('a,b,c'), ',');
+  assert.equal(FilesUtil.sniffDelimiter('a;b;c'), ';');
+  assert.equal(FilesUtil.sniffDelimiter('a\tb\tc'), '\t');
+  assert.equal(FilesUtil.sniffDelimiter('"a;b",c,d'), ',');
+});
+
+test('chunkLines divides arrays into bounded chunks', () => {
+  const lines = Array.from({ length: 1250 }, (_, i) => `line ${i + 1}`);
+  const chunks = FilesUtil.chunkLines(lines, 500);
+  assert.equal(chunks.length, 3);
+  assert.equal(chunks[0].length, 500);
+  assert.equal(chunks[1].length, 500);
+  assert.equal(chunks[2].length, 250);
+});
+

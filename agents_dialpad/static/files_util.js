@@ -51,10 +51,107 @@
     return `${Math.floor(s / 86400)}d ago`;
   }
 
+  function sniffDelimiter(line) {
+    if (!line) return ',';
+    let commas = 0, semicolons = 0, tabs = 0;
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') {
+        inQuotes = !inQuotes;
+      } else if (!inQuotes) {
+        if (c === ',') commas++;
+        else if (c === ';') semicolons++;
+        else if (c === '\t') tabs++;
+      }
+    }
+    if (tabs > commas && tabs > semicolons) return '\t';
+    if (semicolons > commas && semicolons >= tabs) return ';';
+    return ',';
+  }
+
+  function parseCSV(text) {
+    if (!text || !text.trim()) return [];
+    const firstLine = text.split(/\r\n|\r|\n/)[0];
+    const delim = sniffDelimiter(firstLine);
+
+    const rows = [];
+    let curRow = [];
+    let curField = '';
+    let inQuotes = false;
+    let i = 0;
+
+    while (i < text.length) {
+      const c = text[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (i + 1 < text.length && text[i + 1] === '"') {
+            curField += '"';
+            i += 2;
+            continue;
+          } else {
+            inQuotes = false;
+            i++;
+            continue;
+          }
+        } else {
+          curField += c;
+          i++;
+        }
+      } else {
+        if (c === '"') {
+          inQuotes = true;
+          i++;
+        } else if (c === delim) {
+          curRow.push(curField);
+          curField = '';
+          i++;
+        } else if (c === '\r') {
+          if (i + 1 < text.length && text[i + 1] === '\n') {
+            i++;
+          }
+          curRow.push(curField);
+          curField = '';
+          rows.push(curRow);
+          curRow = [];
+          i++;
+        } else if (c === '\n') {
+          curRow.push(curField);
+          curField = '';
+          rows.push(curRow);
+          curRow = [];
+          i++;
+        } else {
+          curField += c;
+          i++;
+        }
+      }
+    }
+
+    if (curField.length > 0 || curRow.length > 0) {
+      curRow.push(curField);
+      rows.push(curRow);
+    }
+
+    return rows;
+  }
+
+  function chunkLines(lines, chunkSize = 500) {
+    if (!Array.isArray(lines)) return [];
+    const chunks = [];
+    for (let i = 0; i < lines.length; i += chunkSize) {
+      chunks.push(lines.slice(i, i + chunkSize));
+    }
+    return chunks;
+  }
+
   return {
     joinPath,
     crumbs,
     humanSize,
     ago,
+    sniffDelimiter,
+    parseCSV,
+    chunkLines,
   };
 });

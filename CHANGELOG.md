@@ -6,6 +6,7 @@ project uses [semantic versioning](https://semver.org/) (0.x means the interface
 ## [Unreleased]
 
 ### Added
+- **Text, code, Markdown, JSON and CSV viewer:** File viewer sheet with line-numbered code/text view, chunked rendering for large files, Wrap toggle, font sizing, rendered Markdown view with safe HTML escaping, pretty-printed JSON, tabular CSV with sticky headers, in-file Find search, and Download/Share/Copy overflow actions.
 - **Project file browser:** Browse project directories from chat (**More → Files**) with breadcrumb navigation, client-side filtering, file metadata card, and Download/Share via Web Share API.
 - **Read-only project files API:** Server endpoints (`/api/projects/{project}/files`, `/files/meta`, `/files/content`) to browse folders, retrieve file metadata, and stream file contents. Includes a secrets denylist (`.env`, `*.pem`, `*.key`, `id_rsa*`, etc.), prevents escaping project roots or reading internal app data (`<data>/`), enforces safe sandbox CSP headers with non-executable content types (`text/plain` for HTML/SVG/JS), supports HTTP Range requests, and adds a `"file_viewer"` kill switch.
 - **New logo (Concept B):** a lowercase "d" whose counter is a ">" prompt, in the app palette (`#7aa7ff` on dark, `#1a56e8` on light). Used for the app icons, favicon, Windows shortcut icon, login screen, sidebar header, lock screen, boot splash and the README. `python tools/make_icons.py` regenerates every icon from `agents_dialpad/static/logo-mark.svg` with the standard library only.

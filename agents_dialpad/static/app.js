@@ -1993,7 +1993,331 @@ async function saveFile(project, path, name, btn) {
 }
 
 async function openFileViewer(project, path) {
-  return openFileMetadata(project, path);
+  let meta;
+  try {
+    meta = await getJSON(`/projects/${encodeURIComponent(project)}/files/meta?path=${encodeURIComponent(path)}`);
+  } catch (e) {
+    return handleErr(e);
+  }
+
+  if (!['text', 'markdown', 'json', 'csv'].includes(meta.kind)) {
+    return openFileMetadata(project, path, meta);
+  }
+
+  const dlg = openSheet('<h2>' + esc(meta.name) + '</h2><p class="lede">Loading file…</p>', meta.name);
+  dlg.classList.add('wide');
+  const body = $('.sheet-body', dlg);
+
+  let rawText = '';
+  let isTruncated = false;
+  try {
+    const res = await api(`/projects/${encodeURIComponent(project)}/files/content?path=${encodeURIComponent(path)}&download=0`);
+    isTruncated = res.headers.get('X-Truncated') === '1';
+    const blob = await res.blob();
+    rawText = await blob.text();
+  } catch (e) {
+    dlg.close();
+    return handleErr(e);
+  }
+
+  const folderPath = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : '';
+  let viewMode = meta.kind === 'markdown' ? 'rendered' : meta.kind === 'csv' ? 'table' : 'text';
+  let wrapMode = false;
+  let fontSize = parseFloat(LS.get('ag_file_font_size') || '13');
+  if (isNaN(fontSize) || fontSize < 9 || fontSize > 24) fontSize = 13;
+
+  function renderViewer() {
+    body.innerHTML = '';
+
+    const topBar = document.createElement('div');
+    topBar.className = 'viewer-top';
+
+    const topLeft = document.createElement('div');
+    topLeft.className = 'viewer-top-left';
+
+    const backBtn = document.createElement('button');
+    backBtn.type = 'button';
+    backBtn.className = 'btn secondary icon-btn';
+    backBtn.setAttribute('aria-label', 'Back to folder');
+    backBtn.innerHTML = icon('back');
+    backBtn.onclick = () => { dlg.close(); openFiles(folderPath); };
+    topLeft.appendChild(backBtn);
+
+    const titleEl = document.createElement('span');
+    titleEl.className = 'viewer-title';
+    titleEl.textContent = meta.name;
+    topLeft.appendChild(titleEl);
+    topBar.appendChild(topLeft);
+
+    const controls = document.createElement('div');
+    controls.className = 'viewer-controls';
+
+    if (meta.kind === 'markdown') {
+      const modeBtn = document.createElement('button');
+      modeBtn.type = 'button';
+      modeBtn.className = 'btn secondary viewer-toggle-btn';
+      modeBtn.textContent = viewMode === 'rendered' ? 'Source' : 'Rendered';
+      modeBtn.onclick = () => {
+        viewMode = viewMode === 'rendered' ? 'text' : 'rendered';
+        renderViewer();
+      };
+      controls.appendChild(modeBtn);
+    } else if (meta.kind === 'csv') {
+      const modeBtn = document.createElement('button');
+      modeBtn.type = 'button';
+      modeBtn.className = 'btn secondary viewer-toggle-btn';
+      modeBtn.textContent = viewMode === 'table' ? 'Source' : 'Table';
+      modeBtn.onclick = () => {
+        viewMode = viewMode === 'table' ? 'text' : 'table';
+        renderViewer();
+      };
+      controls.appendChild(modeBtn);
+    }
+
+    if (viewMode === 'text') {
+      const wrapBtn = document.createElement('button');
+      wrapBtn.type = 'button';
+      wrapBtn.className = 'btn secondary viewer-toggle-btn';
+      wrapBtn.textContent = wrapMode ? 'No wrap' : 'Wrap';
+      wrapBtn.onclick = () => {
+        wrapMode = !wrapMode;
+        renderViewer();
+      };
+      controls.appendChild(wrapBtn);
+
+      const fontDown = document.createElement('button');
+      fontDown.type = 'button';
+      fontDown.className = 'btn secondary viewer-toggle-btn';
+      fontDown.textContent = 'A-';
+      fontDown.onclick = () => {
+        fontSize = Math.max(9, fontSize - 1);
+        LS.set('ag_file_font_size', fontSize);
+        const codeBox = $('.code-viewer-body', body);
+        if (codeBox) codeBox.style.fontSize = `${fontSize}px`;
+      };
+      controls.appendChild(fontDown);
+
+      const fontUp = document.createElement('button');
+      fontUp.type = 'button';
+      fontUp.className = 'btn secondary viewer-toggle-btn';
+      fontUp.textContent = 'A+';
+      fontUp.onclick = () => {
+        fontSize = Math.min(24, fontSize + 1);
+        LS.set('ag_file_font_size', fontSize);
+        const codeBox = $('.code-viewer-body', body);
+        if (codeBox) codeBox.style.fontSize = `${fontSize}px`;
+      };
+      controls.appendChild(fontUp);
+    }
+
+    const moreBtn = document.createElement('button');
+    moreBtn.type = 'button';
+    moreBtn.className = 'btn secondary icon-btn';
+    moreBtn.setAttribute('aria-label', 'File options');
+    moreBtn.innerHTML = icon('more');
+    moreBtn.onclick = (e) => {
+      openMenu(e.currentTarget, [
+        { icon: 'download', label: 'Download / Share', run: () => saveFile(project, path, meta.name, moreBtn) },
+        { icon: 'copy', label: 'Copy path', run: async () => { await copyText(path); toast('Path copied'); } },
+        { icon: 'copy', label: 'Copy contents', run: async () => { await copyText(rawText); toast('Contents copied'); } },
+      ]);
+    };
+    controls.appendChild(moreBtn);
+    topBar.appendChild(controls);
+    body.appendChild(topBar);
+
+    if (isTruncated) {
+      const truncBanner = document.createElement('div');
+      truncBanner.className = 'files-notice';
+      truncBanner.style.display = 'flex';
+      truncBanner.style.justifyContent = 'space-between';
+      truncBanner.style.alignItems = 'center';
+      truncBanner.innerHTML = `<span>Showing the first 1 MB.</span>`;
+      const dlBtn = document.createElement('button');
+      dlBtn.type = 'button';
+      dlBtn.className = 'btn secondary';
+      dlBtn.style.minHeight = '32px';
+      dlBtn.style.padding = '2px 8px';
+      dlBtn.textContent = 'Download full file';
+      dlBtn.onclick = () => saveFile(project, path, meta.name, dlBtn);
+      truncBanner.appendChild(dlBtn);
+      body.appendChild(truncBanner);
+    }
+
+    if (viewMode === 'rendered' && meta.kind === 'markdown') {
+      const mdBox = document.createElement('div');
+      mdBox.className = 'markdown-preview-box';
+      mdBox.innerHTML = Markdown.render(rawText);
+      body.appendChild(mdBox);
+    } else if (viewMode === 'table' && meta.kind === 'csv') {
+      const csvBox = document.createElement('div');
+      csvBox.className = 'csv-box';
+      const rows = FilesUtil.parseCSV(rawText);
+      if (!rows.length) {
+        csvBox.innerHTML = '<div class="files-empty">Empty CSV file</div>';
+      } else {
+        const table = document.createElement('table');
+        table.className = 'csv-table';
+        const thead = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+        const headerCols = rows[0];
+        for (const col of headerCols) {
+          const th = document.createElement('th');
+          th.textContent = col;
+          headerRow.appendChild(th);
+        }
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement('tbody');
+        const dataRows = rows.slice(1, 501);
+        for (const row of dataRows) {
+          const tr = document.createElement('tr');
+          for (let c = 0; c < headerCols.length; c++) {
+            const td = document.createElement('td');
+            td.textContent = row[c] != null ? row[c] : '';
+            tr.appendChild(td);
+          }
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        csvBox.appendChild(table);
+
+        if (rows.length > 501) {
+          const moreNotice = document.createElement('div');
+          moreNotice.className = 'files-notice';
+          moreNotice.textContent = `Showing first 500 of ${rows.length - 1} rows.`;
+          csvBox.appendChild(moreNotice);
+        }
+      }
+      body.appendChild(csvBox);
+    } else {
+      let displayText = rawText;
+      let jsonErrorNote = '';
+      if (meta.kind === 'json') {
+        try {
+          displayText = JSON.stringify(JSON.parse(rawText), null, 2);
+        } catch {
+          jsonErrorNote = '<div class="files-notice">Not valid JSON</div>';
+        }
+      }
+
+      if (jsonErrorNote) {
+        const errDiv = document.createElement('div');
+        errDiv.innerHTML = jsonErrorNote;
+        body.appendChild(errDiv);
+      }
+
+      const codeContainer = document.createElement('div');
+      codeContainer.className = 'code-viewer-container';
+
+      const findBar = document.createElement('div');
+      findBar.className = 'find-bar';
+      const findInput = document.createElement('input');
+      findInput.type = 'search';
+      findInput.placeholder = 'Find in file…';
+      findInput.setAttribute('aria-label', 'Find in file');
+      const findCount = document.createElement('span');
+      findCount.className = 'find-count';
+      findBar.appendChild(findInput);
+      findBar.appendChild(findCount);
+      codeContainer.appendChild(findBar);
+
+      const codeBody = document.createElement('div');
+      codeBody.className = `code-viewer-body ${wrapMode ? 'wrap' : 'nowrap'}`;
+      codeBody.style.fontSize = `${fontSize}px`;
+      codeContainer.appendChild(codeBody);
+      body.appendChild(codeContainer);
+
+      const lines = displayText.split(/\r\n|\r|\n/);
+      const chunks = FilesUtil.chunkLines(lines, 500);
+
+      let lineOffset = 0;
+      function renderChunk(chunkIndex) {
+        if (chunkIndex >= chunks.length) return;
+        const currentChunk = chunks[chunkIndex];
+        const frag = document.createDocumentFragment();
+        for (let i = 0; i < currentChunk.length; i++) {
+          const lineEl = document.createElement('div');
+          lineEl.className = 'code-line';
+
+          const numEl = document.createElement('span');
+          numEl.className = 'code-line-num';
+          numEl.textContent = String(lineOffset + i + 1);
+
+          const textEl = document.createElement('span');
+          textEl.className = 'code-line-text';
+          textEl.textContent = currentChunk[i] || ' ';
+
+          lineEl.appendChild(numEl);
+          lineEl.appendChild(textEl);
+          frag.appendChild(lineEl);
+        }
+        codeBody.appendChild(frag);
+        lineOffset += currentChunk.length;
+
+        if (chunkIndex + 1 < chunks.length) {
+          requestAnimationFrame(() => renderChunk(chunkIndex + 1));
+        }
+      }
+      renderChunk(0);
+
+      findInput.oninput = () => {
+        const query = findInput.value;
+        $$('mark.search-match', codeBody).forEach((m) => {
+          const parent = m.parentNode;
+          if (parent) {
+            parent.replaceChild(document.createTextNode(m.textContent), m);
+            parent.normalize();
+          }
+        });
+        if (!query) {
+          findCount.textContent = '';
+          return;
+        }
+        let matches = 0;
+        const textNodes = $$('.code-line-text', codeBody);
+        const lowerQ = query.toLowerCase();
+        for (const tNode of textNodes) {
+          const original = tNode.textContent;
+          const lowerOrig = original.toLowerCase();
+          if (lowerOrig.includes(lowerQ)) {
+            tNode.textContent = '';
+            let lastIdx = 0;
+            let idx = lowerOrig.indexOf(lowerQ, lastIdx);
+            while (idx !== -1) {
+              matches++;
+              if (idx > lastIdx) {
+                tNode.appendChild(document.createTextNode(original.substring(lastIdx, idx)));
+              }
+              const mark = document.createElement('mark');
+              mark.className = 'search-match';
+              mark.textContent = original.substring(idx, idx + query.length);
+              tNode.appendChild(mark);
+              lastIdx = idx + query.length;
+              idx = lowerOrig.indexOf(lowerQ, lastIdx);
+            }
+            if (lastIdx < original.length) {
+              tNode.appendChild(document.createTextNode(original.substring(lastIdx)));
+            }
+          }
+        }
+        findCount.textContent = `${matches} match${matches === 1 ? '' : 'es'}`;
+      };
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn secondary';
+    closeBtn.textContent = 'Close';
+    closeBtn.onclick = () => dlg.close();
+    actions.appendChild(closeBtn);
+    body.appendChild(actions);
+  }
+
+  renderViewer();
 }
 
 async function openFileMetadata(project, path) {
